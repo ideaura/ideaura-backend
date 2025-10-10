@@ -17,6 +17,17 @@ function generatePrivateTopic(userId1, userId2) {
   return `${config.mqtt.topic}/private/${hash}`;
 }
 
+// 生成安全的话题主题
+function generateTopicChannel(topicId) {
+  // 使用HMAC生成安全的话题主题名称
+  const hash = crypto
+    .createHmac('sha256', config.jwtSecret || 'default-secret')
+    .update(`topic-${topicId}`)
+    .digest('hex');
+  
+  return `${config.mqtt.topic}/topic/${hash}`;
+}
+
 function initMQTT() {
   return new Promise((resolve, reject) => {
     mqttClient = mqtt.connect(config.mqtt.broker);
@@ -87,8 +98,28 @@ function broadcastMessage(messageData) {
           }
         }
       );
-    } else {
-      // 公共消息广播到公共主题
+    } 
+    // 如果是话题消息，发送到安全的话题主题
+    else if (messageData.topic_id) {
+      // 生成安全的话题主题
+      const topicChannel = generateTopicChannel(messageData.topic_id);
+      
+      // 发布到安全的话题主题
+      mqttClient.publish(
+        topicChannel, 
+        JSON.stringify(messageData), 
+        { qos: 1 },
+        (err) => {
+          if (err) {
+            console.error('广播话题消息失败:', err);
+          } else {
+            console.log('话题消息已广播到安全频道:', messageData.id);
+          }
+        }
+      );
+    }
+    // 公共消息广播到公共主题
+    else {
       mqttClient.publish(
         config.mqtt.topic, 
         JSON.stringify(messageData), 
@@ -108,6 +139,6 @@ function broadcastMessage(messageData) {
 module.exports = { 
   initMQTT, 
   broadcastMessage,
-  generatePrivateTopic, // 导出以便其他模块使用
-  getMQTTClient: () => mqttClient
+  generatePrivateTopic,
+  generateTopicChannel // 导出以便其他模块使用
 };

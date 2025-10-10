@@ -45,7 +45,7 @@ const tableSchemas = [
           name TEXT NOT NULL UNIQUE,
           description TEXT,
           created_by INTEGER NOT NULL,
-          is_private BOOLEAN DEFAULT 0, -- 是否为私有话题
+          is_private BOOLEAN DEFAULT 1, -- 默认为私有话题
           is_active BOOLEAN DEFAULT 1,
           message_count INTEGER DEFAULT 0,
           last_activity DATETIME, -- 使用本地时间(UTC+8)
@@ -66,6 +66,7 @@ const tableSchemas = [
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           topic_id INTEGER NOT NULL,
           user_id INTEGER NOT NULL,
+          role TEXT DEFAULT 'member', -- 角色: 'creator', 'admin', 'member'
           joined_at DATETIME DEFAULT (datetime('now', 'localtime')), -- 使用本地时间(UTC+8)
           FOREIGN KEY (topic_id) REFERENCES topics(id) ON DELETE CASCADE,
           FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE

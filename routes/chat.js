@@ -3,10 +3,38 @@ const router = express.Router();
 
 const Topic = require('../models/Topic');
 const Message = require('../models/Message');
+const User = require('../models/User');
 const { broadcastMessage } = require('../services/mqtt');
 const { validateTopicName, validateTopicDescription } = require('../utils/validators');
 const { getCalibratedTime } = require('../utils/timezone');
 const { authenticateToken } = require('../middleware/auth');
+
+// 获取推荐话题
+router.get('/chat/topics/recommended', authenticateToken, async (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit) || 10;
+    
+    // 获取三类推荐话题
+    const popularTopics = await Topic.getPopularTopics(limit);
+    const recentActiveTopics = await Topic.getRecentActiveTopics(limit);
+    const newTopics = await Topic.getNewTopics(limit);
+    
+    res.json({
+      success: true,
+      data: {
+        popular: popularTopics,
+        recentActive: recentActiveTopics,
+        new: newTopics
+      }
+    });
+  } catch (error) {
+    console.error("获取推荐话题错误:", error);
+    res.status(500).json({ 
+      success: false, 
+      message: '服务器错误' 
+    });
+  }
+});
 
 // 获取用户加入的话题列表
 router.get('/chat/topics', authenticateToken, async (req, res) => {
@@ -27,11 +55,11 @@ router.get('/chat/topics', authenticateToken, async (req, res) => {
   }
 });
 
-// 获取所有公开话题列表
+// 获取所有话题列表（仅用户加入的）
 router.get('/chat/topics/all', authenticateToken, async (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 50;
-    const topics = await Topic.findAll(limit);
+    const topics = await Topic.findAll(req.user.id, limit);
     
     res.json({
       success: true,
@@ -228,15 +256,13 @@ router.get('/chat/topics/:topicId/messages', authenticateToken, async (req, res)
       });
     }
     
-    // 检查是否是私有话题且用户不是成员
-    if (topic.is_private) {
-      const isMember = await Topic.isMember(topicId, userId);
-      if (!isMember) {
-        return res.status(403).json({ 
-          success: false, 
-          message: '您没有权限查看此话题的消息' 
-        });
-      }
+    // 检查用户是否是话题成员
+    const isMember = await Topic.isMember(topicId, userId);
+    if (!isMember) {
+      return res.status(403).json({ 
+        success: false, 
+        message: '您没有权限查看此话题的消息' 
+      });
     }
 
     const messages = await Message.findByTopic(topicId, limit, offset);
@@ -353,9 +379,9 @@ router.get('/chat/online-users', authenticateToken, (req, res) => {
   });
 });
 
-// 创建话题（支持私有话题）
+// 创建话题（所有话题默认为私有）
 router.post('/chat/topics', authenticateToken, async (req, res) => {
-  const { name, description, isPrivate = false } = req.body;
+  const { name, description } = req.body;
   const userId = req.user.id;
 
   if (!validateTopicName(name)) {
@@ -382,12 +408,11 @@ router.post('/chat/topics', authenticateToken, async (req, res) => {
       });
     }
 
-    // 创建新话题
+    // 创建新话题（默认为私有）
     const topicId = await Topic.create({
       name: name.trim(),
       description: description ? description.trim() : null,
-      created_by: userId,
-      is_private: isPrivate ? 1 : 0
+      created_by: userId
     });
 
     const topic = await Topic.findById(topicId);
@@ -409,4 +434,317 @@ router.post('/chat/topics', authenticateToken, async (req, res) => {
 // 加入话题
 router.post('/chat/topics/:topicId/join', authenticateToken, async (req, res) => {
   const topicId = req.params.topicId;
-  const userId = req.user.id
+  const userId = req.user.id;
+
+  // 验证话题ID
+  if (isNaN(topicId)) {
+    return res.status(400).json({ 
+      success: false, 
+      message: '话题ID无效' 
+    });
+  }
+
+  try {
+    // 验证话题是否存在
+    const topic = await Topic.findById(topicId);
+    if (!topic) {
+      return res.status(404).json({ 
+        success: false, 
+        message: '话题不存在' 
+      });
+    }
+
+    // 如果是私有话题，只有创建者和管理员可以邀请他人加入
+    if (topic.is_private) {
+      const isCreatorOrAdmin = await Topic.isCreatorOrAdmin(topicId, userId);
+      if (!isCreatorOrAdmin) {
+        return res.status(403).json({ 
+          success: false, 
+          message: '只有话题创建者和管理员可以邀请他人加入私有话题' 
+        });
+      }
+    }
+
+    // 加入话题
+    const result = await Topic.joinTopic(topicId, userId);
+    
+    res.json({
+      success: true,
+      message: '成功加入话题',
+      data: result
+    });
+  } catch (error) {
+    console.error("加入话题错误:", error);
+    res.status(500).json({ 
+      success: false, 
+      message: error.message || '服务器错误' 
+    });
+  }
+});
+
+// 退出话题
+router.post('/chat/topics/:topicId/leave', authenticateToken, async (req, res) => {
+  const topicId = req.params.topicId;
+  const userId = req.user.id;
+
+  // 验证话题ID
+  if (isNaN(topicId)) {
+    return res.status(400).json({ 
+      success: false, 
+      message: '话题ID无效' 
+    });
+  }
+
+  try {
+    // 验证话题是否存在
+    const topic = await Topic.findById(topicId);
+    if (!topic) {
+      return res.status(404).json({ 
+        success: false, 
+        message: '话题不存在' 
+      });
+    }
+
+    // 退出话题
+    const result = await Topic.leaveTopic(topicId, userId);
+    
+    res.json({
+      success: true,
+      message: '成功退出话题',
+      data: result
+    });
+  } catch (error) {
+    console.error("退出话题错误:", error);
+    res.status(500).json({ 
+      success: false, 
+      message: error.message || '服务器错误' 
+    });
+  }
+});
+
+// 获取话题成员列表
+router.get('/chat/topics/:topicId/members', authenticateToken, async (req, res) => {
+  const topicId = req.params.topicId;
+  const limit = parseInt(req.query.limit) || 50;
+  const userId = req.user.id;
+
+  // 验证话题ID
+  if (isNaN(topicId)) {
+    return res.status(400).json({ 
+      success: false, 
+      message: '话题ID无效' 
+    });
+  }
+
+  try {
+    // 验证话题是否存在
+    const topic = await Topic.findById(topicId);
+    if (!topic) {
+      return res.status(404).json({ 
+        success: false, 
+        message: '话题不存在' 
+      });
+    }
+
+    // 检查用户是否有权限查看成员列表
+    const isMember = await Topic.isMember(topicId, userId);
+    if (topic.is_private && !isMember) {
+      return res.status(403).json({ 
+        success: false, 
+        message: '您没有权限查看此私有话题的成员列表' 
+      });
+    }
+
+    // 获取成员列表
+    const members = await Topic.getMembers(topicId, limit);
+    const memberCount = await Topic.getMemberCount(topicId);
+    
+    res.json({
+      success: true,
+      data: {
+        members,
+        count: memberCount
+      }
+    });
+  } catch (error) {
+    console.error("获取话题成员列表错误:", error);
+    res.status(500).json({ 
+      success: false, 
+      message: '服务器错误' 
+    });
+  }
+});
+
+// 设置话题管理员
+router.post('/chat/topics/:topicId/admins/:adminId', authenticateToken, async (req, res) => {
+  const topicId = req.params.topicId;
+  const adminId = req.params.adminId;
+  const userId = req.user.id;
+
+  // 验证参数
+  if (isNaN(topicId) || isNaN(adminId)) {
+    return res.status(400).json({ 
+      success: false, 
+      message: '话题ID或用户ID无效' 
+    });
+  }
+
+  try {
+    // 验证话题是否存在
+    const topic = await Topic.findById(topicId);
+    if (!topic) {
+      return res.status(404).json({ 
+        success: false, 
+        message: '话题不存在' 
+      });
+    }
+
+    // 验证要设置为管理员的用户是否存在
+    const user = await User.findById(adminId);
+    if (!user) {
+      return res.status(404).json({ 
+        success: false, 
+        message: '用户不存在' 
+      });
+    }
+
+    // 设置管理员
+    const result = await Topic.setAdmin(topicId, userId, parseInt(adminId));
+    
+    res.json({
+      success: true,
+      message: '成功设置管理员',
+      data: result
+    });
+  } catch (error) {
+    console.error("设置管理员错误:", error);
+    res.status(500).json({ 
+      success: false, 
+      message: error.message || '服务器错误' 
+    });
+  }
+});
+
+// 取消话题管理员
+router.delete('/chat/topics/:topicId/admins/:adminId', authenticateToken, async (req, res) => {
+  const topicId = req.params.topicId;
+  const adminId = req.params.adminId;
+  const userId = req.user.id;
+
+  // 验证参数
+  if (isNaN(topicId) || isNaN(adminId)) {
+    return res.status(400).json({ 
+      success: false, 
+      message: '话题ID或用户ID无效' 
+    });
+  }
+
+  try {
+    // 验证话题是否存在
+    const topic = await Topic.findById(topicId);
+    if (!topic) {
+      return res.status(404).json({ 
+        success: false, 
+        message: '话题不存在' 
+      });
+    }
+
+    // 验证要取消管理员的用户是否存在
+    const user = await User.findById(adminId);
+    if (!user) {
+      return res.status(404).json({ 
+        success: false, 
+        message: '用户不存在' 
+      });
+    }
+
+    // 取消管理员
+    const result = await Topic.removeAdmin(topicId, userId, parseInt(adminId));
+    
+    res.json({
+      success: true,
+      message: '成功取消管理员',
+      data: result
+    });
+  } catch (error) {
+    console.error("取消管理员错误:", error);
+    res.status(500).json({ 
+      success: false, 
+      message: error.message || '服务器错误' 
+    });
+  }
+});
+
+// 修改话题信息
+router.put('/chat/topics/:topicId', authenticateToken, async (req, res) => {
+  const topicId = req.params.topicId;
+  const userId = req.user.id;
+  const { name, description } = req.body;
+
+  // 验证话题ID
+  if (isNaN(topicId)) {
+    return res.status(400).json({ 
+      success: false, 
+      message: '话题ID无效' 
+    });
+  }
+
+  try {
+    // 验证话题是否存在
+    const topic = await Topic.findById(topicId);
+    if (!topic) {
+      return res.status(404).json({ 
+        success: false, 
+        message: '话题不存在' 
+      });
+    }
+
+    // 验证用户是否有权限修改话题
+    const isCreatorOrAdmin = await Topic.isCreatorOrAdmin(topicId, userId);
+    if (!isCreatorOrAdmin) {
+      return res.status(403).json({ 
+        success: false, 
+        message: '只有话题创建者和管理员可以修改话题信息' 
+      });
+    }
+
+    // 验证参数
+    if (name !== undefined && (!name || name.trim().length === 0 || name.length > 50)) {
+      return res.status(400).json({ 
+        success: false, 
+        message: '话题名称不能为空且不能超过50个字符' 
+      });
+    }
+
+    if (description !== undefined && description.length > 200) {
+      return res.status(400).json({ 
+        success: false, 
+        message: '话题描述不能超过200个字符' 
+      });
+    }
+
+    // 更新话题信息
+    const updates = {};
+    if (name !== undefined) updates.name = name.trim();
+    if (description !== undefined) updates.description = description.trim();
+    
+    const result = await Topic.updateTopic(topicId, userId, updates);
+    
+    // 获取更新后的话题信息
+    const updatedTopic = await Topic.findById(topicId);
+    
+    res.json({
+      success: true,
+      message: '话题信息更新成功',
+      data: updatedTopic
+    });
+  } catch (error) {
+    console.error("修改话题信息错误:", error);
+    res.status(500).json({ 
+      success: false, 
+      message: error.message || '服务器错误' 
+    });
+  }
+});
+
+module.exports = router;
