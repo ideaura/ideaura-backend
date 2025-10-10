@@ -8,18 +8,18 @@ const { validateTopicName, validateTopicDescription } = require('../utils/valida
 const { getCalibratedTime } = require('../utils/timezone');
 const { authenticateToken } = require('../middleware/auth');
 
-// 获取活跃话题列表
-router.get('/chat/topics/active', authenticateToken, async (req, res) => {
+// 获取用户加入的话题列表
+router.get('/chat/topics', authenticateToken, async (req, res) => {
   try {
-    const limit = parseInt(req.query.limit) || 10;
-    const topics = await Topic.findActive(limit);
+    const limit = parseInt(req.query.limit) || 50;
+    const topics = await Topic.findByUser(req.user.id, limit);
     
     res.json({
       success: true,
       data: topics
     });
   } catch (error) {
-    console.error("获取活跃话题列表错误:", error);
+    console.error("获取用户话题列表错误:", error);
     res.status(500).json({ 
       success: false, 
       message: '服务器错误' 
@@ -27,7 +27,7 @@ router.get('/chat/topics/active', authenticateToken, async (req, res) => {
   }
 });
 
-// 获取所有话题列表
+// 获取所有公开话题列表
 router.get('/chat/topics/all', authenticateToken, async (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 50;
@@ -39,6 +39,33 @@ router.get('/chat/topics/all', authenticateToken, async (req, res) => {
     });
   } catch (error) {
     console.error("获取所有话题列表错误:", error);
+    res.status(500).json({ 
+      success: false, 
+      message: '服务器错误' 
+    });
+  }
+});
+
+// 搜索话题（按名称或ID）
+router.get('/chat/topics/search', authenticateToken, async (req, res) => {
+  try {
+    const { query, limit = 50 } = req.query;
+    
+    if (!query || query.trim().length < 1) {
+      return res.status(400).json({
+        success: false,
+        message: '搜索关键词不能为空'
+      });
+    }
+
+    const topics = await Topic.search(query.trim(), req.user.id, parseInt(limit));
+    
+    res.json({
+      success: true,
+      data: topics
+    });
+  } catch (error) {
+    console.error("搜索话题错误:", error);
     res.status(500).json({ 
       success: false, 
       message: '服务器错误' 
@@ -59,7 +86,7 @@ router.post('/chat/messages', authenticateToken, async (req, res) => {
   }
 
   try {
-    // 如果指定了话题，验证话题是否存在
+    // 如果指定了话题，验证话题是否存在且用户有权访问
     if (topicId) {
       const topic = await Topic.findById(topicId);
       if (!topic) {
@@ -67,6 +94,17 @@ router.post('/chat/messages', authenticateToken, async (req, res) => {
           success: false, 
           message: '话题不存在' 
         });
+      }
+      
+      // 检查是否是私有话题且用户不是成员
+      if (topic.is_private) {
+        const isMember = await Topic.isMember(topicId, userId);
+        if (!isMember) {
+          return res.status(403).json({ 
+            success: false, 
+            message: '您没有权限在此话题中发送消息' 
+          });
+        }
       }
     }
 
@@ -173,6 +211,53 @@ router.get('/chat/messages', authenticateToken, async (req, res) => {
   }
 });
 
+// 获取特定话题的消息历史
+router.get('/chat/topics/:topicId/messages', authenticateToken, async (req, res) => {
+  const topicId = req.params.topicId;
+  const limit = parseInt(req.query.limit) || 50;
+  const offset = parseInt(req.query.offset) || 0;
+  const userId = req.user.id;
+
+  try {
+    // 验证话题是否存在
+    const topic = await Topic.findById(topicId);
+    if (!topic) {
+      return res.status(404).json({ 
+        success: false, 
+        message: '话题不存在' 
+      });
+    }
+    
+    // 检查是否是私有话题且用户不是成员
+    if (topic.is_private) {
+      const isMember = await Topic.isMember(topicId, userId);
+      if (!isMember) {
+        return res.status(403).json({ 
+          success: false, 
+          message: '您没有权限查看此话题的消息' 
+        });
+      }
+    }
+
+    const messages = await Message.findByTopic(topicId, limit, offset);
+    
+    res.json({
+      success: true,
+      data: {
+        topic,
+        messages,
+        total: messages.length
+      }
+    });
+  } catch (error) {
+    console.error("获取话题消息历史错误:", error);
+    res.status(500).json({ 
+      success: false, 
+      message: '服务器错误' 
+    });
+  }
+});
+
 // 获取与特定用户的私聊消息历史
 router.get('/chat/private-messages/:userId', authenticateToken, async (req, res) => {
   const otherUserId = req.params.userId;
@@ -257,41 +342,6 @@ router.get('/chat/private-messages/unread/count', authenticateToken, async (req,
   }
 });
 
-// 获取特定话题的消息历史
-router.get('/chat/topics/:topicId/messages', authenticateToken, async (req, res) => {
-  const topicId = req.params.topicId;
-  const limit = parseInt(req.query.limit) || 50;
-  const offset = parseInt(req.query.offset) || 0;
-
-  try {
-    // 验证话题是否存在
-    const topic = await Topic.findById(topicId);
-    if (!topic) {
-      return res.status(404).json({ 
-        success: false, 
-        message: '话题不存在' 
-      });
-    }
-
-    const messages = await Message.findByTopic(topicId, limit, offset);
-    
-    res.json({
-      success: true,
-      data: {
-        topic,
-        messages,
-        total: messages.length
-      }
-    });
-  } catch (error) {
-    console.error("获取话题消息历史错误:", error);
-    res.status(500).json({ 
-      success: false, 
-      message: '服务器错误' 
-    });
-  }
-});
-
 // 获取在线用户数
 router.get('/chat/online-users', authenticateToken, (req, res) => {
   res.json({
@@ -303,9 +353,10 @@ router.get('/chat/online-users', authenticateToken, (req, res) => {
   });
 });
 
-// 创建话题
+// 创建话题（支持私有话题）
 router.post('/chat/topics', authenticateToken, async (req, res) => {
-  const { name, description } = req.body;
+  const { name, description, isPrivate = false } = req.body;
+  const userId = req.user.id;
 
   if (!validateTopicName(name)) {
     return res.status(400).json({ 
@@ -335,7 +386,8 @@ router.post('/chat/topics', authenticateToken, async (req, res) => {
     const topicId = await Topic.create({
       name: name.trim(),
       description: description ? description.trim() : null,
-      created_by: req.user.id
+      created_by: userId,
+      is_private: isPrivate ? 1 : 0
     });
 
     const topic = await Topic.findById(topicId);
@@ -354,31 +406,7 @@ router.post('/chat/topics', authenticateToken, async (req, res) => {
   }
 });
 
-// 归档话题（设为非活跃）
-router.delete('/chat/topics/:topicId', authenticateToken, async (req, res) => {
+// 加入话题
+router.post('/chat/topics/:topicId/join', authenticateToken, async (req, res) => {
   const topicId = req.params.topicId;
-
-  try {
-    const result = await Topic.archive(topicId);
-    
-    if (result.changes === 0) {
-      return res.status(404).json({ 
-        success: false, 
-        message: '话题不存在' 
-      });
-    }
-
-    res.json({
-      success: true,
-      message: '话题已归档'
-    });
-  } catch (error) {
-    console.error("归档话题错误:", error);
-    res.status(500).json({ 
-      success: false, 
-      message: '服务器错误' 
-    });
-  }
-});
-
-module.exports = router;
+  const userId = req.user.id
