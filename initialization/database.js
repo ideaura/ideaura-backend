@@ -45,6 +45,7 @@ const tableSchemas = [
           name TEXT NOT NULL UNIQUE,
           description TEXT,
           created_by INTEGER NOT NULL,
+          is_private BOOLEAN DEFAULT 0, -- 是否为私有话题
           is_active BOOLEAN DEFAULT 1,
           message_count INTEGER DEFAULT 0,
           last_activity DATETIME, -- 使用本地时间(UTC+8)
@@ -53,9 +54,26 @@ const tableSchemas = [
         indexes: [
           'CREATE INDEX IF NOT EXISTS idx_topics_name ON topics(name)',
           'CREATE INDEX IF NOT EXISTS idx_topics_created_by ON topics(created_by)',
+          'CREATE INDEX IF NOT EXISTS idx_topics_is_private ON topics(is_private)',
           'CREATE INDEX IF NOT EXISTS idx_topics_is_active ON topics(is_active)',
           'CREATE INDEX IF NOT EXISTS idx_topics_last_activity ON topics(last_activity)',
           'CREATE INDEX IF NOT EXISTS idx_topics_created_at ON topics(created_at)'
+        ]
+      },
+      {
+        name: 'topic_members',
+        schema: `CREATE TABLE topic_members (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          topic_id INTEGER NOT NULL,
+          user_id INTEGER NOT NULL,
+          joined_at DATETIME DEFAULT (datetime('now', 'localtime')), -- 使用本地时间(UTC+8)
+          FOREIGN KEY (topic_id) REFERENCES topics(id) ON DELETE CASCADE,
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        )`,
+        indexes: [
+          'CREATE INDEX IF NOT EXISTS idx_topic_members_topic_id ON topic_members(topic_id)',
+          'CREATE INDEX IF NOT EXISTS idx_topic_members_user_id ON topic_members(user_id)',
+          'CREATE UNIQUE INDEX IF NOT EXISTS idx_topic_members_unique ON topic_members(topic_id, user_id)'
         ]
       },
       {
@@ -71,6 +89,23 @@ const tableSchemas = [
           'CREATE INDEX IF NOT EXISTS idx_messages_topic_id ON messages(topic_id)',
           'CREATE INDEX IF NOT EXISTS idx_messages_user_id ON messages(user_id)',
           'CREATE INDEX IF NOT EXISTS idx_messages_created_at ON messages(created_at)'
+        ]
+      },
+      {
+        name: 'private_messages',
+        schema: `CREATE TABLE private_messages (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          sender_id INTEGER NOT NULL,
+          receiver_id INTEGER NOT NULL,
+          content TEXT NOT NULL,
+          is_read BOOLEAN DEFAULT 0,
+          created_at DATETIME DEFAULT (datetime('now', 'localtime')) -- 使用本地时间(UTC+8)
+        )`,
+        indexes: [
+          'CREATE INDEX IF NOT EXISTS idx_private_messages_sender_id ON private_messages(sender_id)',
+          'CREATE INDEX IF NOT EXISTS idx_private_messages_receiver_id ON private_messages(receiver_id)',
+          'CREATE INDEX IF NOT EXISTS idx_private_messages_is_read ON private_messages(is_read)',
+          'CREATE INDEX IF NOT EXISTS idx_private_messages_created_at ON private_messages(created_at)'
         ]
       },
       {
