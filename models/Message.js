@@ -1,5 +1,5 @@
 const db = require('../config/database');
-const { formatLocalTime, getRelativeTime, getDatabaseTimeString } = require('../utils/timezone');
+const { formatLocalTime, getRelativeTime } = require('../utils/timezone');
 const { generatePrivateTopic } = require('../services/mqtt');
 
 class Message {
@@ -7,8 +7,8 @@ class Message {
     return new Promise((resolve, reject) => {
       const { topic_id = null, user_id, content } = messageData;
       
-      // 使用校准的UTC+8时间
-      const currentTime = getDatabaseTimeString();
+      // 使用本地时间
+      const currentTime = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false });
       
       db.run(
         "INSERT INTO messages (topic_id, user_id, content, created_at) VALUES (?, ?, ?, ?)",
@@ -35,12 +35,12 @@ class Message {
     return new Promise((resolve, reject) => {
       const { sender_id, receiver_id, content } = privateMessageData;
       
-      // 使用校准的UTC+8时间
-      const currentTime = getDatabaseTimeString();
+      // 使用本地时间
+      const currentTime = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false });
       
       db.run(
-        "INSERT INTO private_messages (sender_id, receiver_id, content, created_at) VALUES (?, ?, ?, ?)",
-        [sender_id, receiver_id, content, currentTime],
+        "INSERT INTO private_messages (sender_id, receiver_id, content, is_read, created_at) VALUES (?, ?, ?, ?, ?)",
+        [sender_id, receiver_id, content, 0, currentTime],
         function(err) {
           if (err) return reject(err);
           

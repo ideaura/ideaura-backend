@@ -8,9 +8,12 @@ class Topic {
       const { name, description, created_by } = topicData;
       const is_private = 1; // 强制设置为私有
       
+      // 使用本地时间
+      const currentTime = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false });
+      
       db.run(
-        "INSERT INTO topics (name, description, created_by, is_private, last_activity) VALUES (?, ?, ?, ?, datetime('now', 'localtime'))",
-        [name, description, created_by, is_private],
+        "INSERT INTO topics (name, description, created_by, is_private, is_active, message_count, last_activity, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        [name, description, created_by, is_private, 1, 0, currentTime, currentTime],
         function(err) {
           if (err) return reject(err);
           
@@ -18,8 +21,8 @@ class Topic {
           
           // 自动将创建者加入话题并设为创建者角色
           db.run(
-            "INSERT INTO topic_members (topic_id, user_id, role) VALUES (?, ?, 'creator')",
-            [topicId, created_by],
+            "INSERT INTO topic_members (topic_id, user_id, role, joined_at) VALUES (?, ?, 'creator', ?)",
+            [topicId, created_by, currentTime],
             (err) => {
               if (err) {
                 console.error("添加创建者到话题成员失败:", err);
@@ -305,9 +308,12 @@ class Topic {
   // 用户加入话题
   static joinTopic(topicId, userId) {
     return new Promise((resolve, reject) => {
+      // 使用本地时间
+      const currentTime = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false });
+      
       db.run(
-        "INSERT OR IGNORE INTO topic_members (topic_id, user_id, role) VALUES (?, ?, 'member')",
-        [topicId, userId],
+        "INSERT OR IGNORE INTO topic_members (topic_id, user_id, role, joined_at) VALUES (?, ?, 'member', ?)",
+        [topicId, userId, currentTime],
         function(err) {
           if (err) return reject(err);
           resolve({ changes: this.changes });
