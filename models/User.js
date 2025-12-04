@@ -127,6 +127,70 @@ class User {
     });
   }
 
+  // 添加创建密码重置令牌的方法
+  static createPasswordResetToken(email) {
+    return new Promise((resolve, reject) => {
+      const resetToken = generateToken();
+      
+      db.run(
+        "UPDATE users SET reset_token = ?, reset_token_expires = datetime('now', '+1 hour') WHERE email = ?",
+        [resetToken, email],
+        function(err) {
+          if (err) return reject(err);
+          if (this.changes === 0) return resolve(null);
+          resolve(resetToken);
+        }
+      );
+    });
+  }
+
+  // 添加验证密码重置令牌的方法
+  static validatePasswordResetToken(token) {
+    return new Promise((resolve, reject) => {
+      db.get(
+        "SELECT id, username, email FROM users WHERE reset_token = ? AND reset_token_expires > datetime('now')",
+        [token],
+        (err, row) => {
+          if (err) return reject(err);
+          resolve(row);
+        }
+      );
+    });
+  }
+
+  // 添加重置密码的方法
+  static resetPassword(token, newPassword) {
+    return new Promise((resolve, reject) => {
+      bcrypt.hash(newPassword, 10, (err, hashedPassword) => {
+        if (err) return reject(err);
+        
+        db.run(
+          "UPDATE users SET password = ?, reset_token = NULL, reset_token_expires = NULL WHERE reset_token = ? AND reset_token_expires > datetime('now')",
+          [hashedPassword, token],
+          function(err) {
+            if (err) return reject(err);
+            if (this.changes === 0) return resolve(false);
+            resolve(true);
+          }
+        );
+      });
+    });
+  }
+
+  // 添加清理过期密码重置令牌的方法
+  static cleanExpiredResetTokens() {
+    return new Promise((resolve, reject) => {
+      db.run(
+        "UPDATE users SET reset_token = NULL, reset_token_expires = NULL WHERE reset_token_expires <= datetime('now')",
+        function(err) {
+          if (err) return reject(err);
+          console.log(`清理了 ${this.changes} 个过期的密码重置令牌`);
+          resolve({ cleaned: this.changes });
+        }
+      );
+    });
+  }
+
   static countByEmail(email) {
     return new Promise((resolve, reject) => {
       db.get(

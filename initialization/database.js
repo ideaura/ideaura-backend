@@ -15,6 +15,8 @@ function initializeDatabase() {
           password TEXT NOT NULL,
           email_verified INTEGER DEFAULT 0,
           verification_token TEXT,
+          reset_token TEXT,
+          reset_token_expires DATETIME,
           registration_order INTEGER,
           created_at DATETIME DEFAULT (datetime('now', 'localtime')) -- 使用本地时间(UTC+8)
         )`,
@@ -22,11 +24,14 @@ function initializeDatabase() {
           'CREATE INDEX IF NOT EXISTS idx_users_username ON users(username)',
           'CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)',
           'CREATE INDEX IF NOT EXISTS idx_users_registration_order ON users(registration_order)',
-          'CREATE INDEX IF NOT EXISTS idx_users_created_at ON users(created_at)'
+          'CREATE INDEX IF NOT EXISTS idx_users_created_at ON users(created_at)',
+          'CREATE INDEX IF NOT EXISTS idx_users_reset_token ON users(reset_token)'
         ],
         // 定义需要检查和可能添加的列
         columns: [
-          { name: 'registration_order', type: 'INTEGER' }
+          { name: 'registration_order', type: 'INTEGER' },
+          { name: 'reset_token', type: 'TEXT' },
+          { name: 'reset_token_expires', type: 'DATETIME' }
         ]
       },
       {
@@ -303,13 +308,14 @@ function initializeDatabase() {
     function performDataFixes(callback) {
       console.log('开始执行数据修复...');
       let fixesCompleted = 0;
-      let totalFixes = 3; // 我们有3个修复操作
+      const totalFixes = 4; // 现在有4个修复操作
+      let hasError = false;
 
       // 修复1: 为现有用户设置注册顺序
       fixUserRegistrationOrder(() => {
         fixesCompleted++;
-        if (fixesCompleted === totalFixes) {
-          console.log('✅ 数据修复完成');
+        if (fixesCompleted === totalFixes && !hasError) {
+          console.log('✅ 所有数据修复完成');
           callback();
         }
       });
@@ -317,8 +323,8 @@ function initializeDatabase() {
       // 修复2: 为现有话题成员设置默认角色
       fixTopicMemberRoles(() => {
         fixesCompleted++;
-        if (fixesCompleted === totalFixes) {
-          console.log('✅ 数据修复完成');
+        if (fixesCompleted === totalFixes && !hasError) {
+          console.log('✅ 所有数据修复完成');
           callback();
         }
       });
@@ -326,125 +332,175 @@ function initializeDatabase() {
       // 修复3: 为现有私聊消息设置已读状态
       fixPrivateMessageReadStatus(() => {
         fixesCompleted++;
-        if (fixesCompleted === totalFixes) {
-          console.log('✅ 数据修复完成');
+        if (fixesCompleted === totalFixes && !hasError) {
+          console.log('✅ 所有数据修复完成');
           callback();
         }
       });
-    }
 
-    // 修复用户注册顺序
-    function fixUserRegistrationOrder(callback) {
-      db.get("SELECT COUNT(*) as count FROM users WHERE registration_order IS NULL", (err, row) => {
-        if (err) {
-          console.error('检查用户注册顺序错误:', err);
+      // 修复4: 清理过期的密码重置令牌
+      cleanExpiredResetTokens(() => {
+        fixesCompleted++;
+        if (fixesCompleted === totalFixes && !hasError) {
+          console.log('✅ 所有数据修复完成');
           callback();
-          return;
         }
+      });
 
-        if (row && row.count > 0) {
-          console.log(`发现 ${row.count} 个用户需要修复注册顺序...`);
-          
-          // 获取所有用户按注册时间排序
-          db.all("SELECT id, created_at FROM users ORDER BY created_at ASC", (err, users) => {
-            if (err) {
-              console.error('获取用户列表错误:', err);
-              callback();
-              return;
-            }
+      // 错误处理函数
+      function handleError(error) {
+        if (!hasError) {
+          hasError = true;
+          console.error('数据修复过程中发生错误:', error);
+        }
+      }
 
-            if (users.length === 0) {
-              callback();
-              return;
-            }
+      // 修复用户注册顺序
+      function fixUserRegistrationOrder(cb) {
+        db.get("SELECT COUNT(*) as count FROM users WHERE registration_order IS NULL", (err, row) => {
+          if (err) {
+            console.error('检查用户注册顺序错误:', err);
+            handleError(err);
+            cb();
+            return;
+          }
 
-            let updatedCount = 0;
-            users.forEach((user, index) => {
-              const registrationOrder = index + 1;
-              
-              db.run(
-                "UPDATE users SET registration_order = ? WHERE id = ?",
-                [registrationOrder, user.id],
-                (err) => {
-                  if (err) {
-                    console.error(`更新用户 ${user.id} 注册顺序错误:`, err);
-                  } else {
-                    updatedCount++;
+          if (row && row.count > 0) {
+            console.log(`发现 ${row.count} 个用户需要修复注册顺序...`);
+            
+            // 获取所有用户按注册时间排序
+            db.all("SELECT id, created_at FROM users ORDER BY created_at ASC", (err, users) => {
+              if (err) {
+                console.error('获取用户列表错误:', err);
+                handleError(err);
+                cb();
+                return;
+              }
+
+              if (users.length === 0) {
+                cb();
+                return;
+              }
+
+              let updatedCount = 0;
+              users.forEach((user, index) => {
+                const registrationOrder = index + 1;
+                
+                db.run(
+                  "UPDATE users SET registration_order = ? WHERE id = ?",
+                  [registrationOrder, user.id],
+                  (err) => {
+                    if (err) {
+                      console.error(`更新用户 ${user.id} 注册顺序错误:`, err);
+                    } else {
+                      updatedCount++;
+                    }
+                    
+                    if (updatedCount === users.length) {
+                      console.log(`✅ 已修复 ${updatedCount} 个用户的注册顺序`);
+                      cb();
+                    } else if (updatedCount < users.length) {
+                      // 继续处理其他用户
+                    } else {
+                      cb();
+                    }
                   }
-                  
-                  if (updatedCount === users.length) {
-                    console.log(`✅ 已修复 ${updatedCount} 个用户的注册顺序`);
-                    callback();
-                  }
-                }
-              );
+                );
+              });
             });
-          });
-        } else {
-          console.log('✅ 用户注册顺序无需修复');
-          callback();
-        }
-      });
-    }
+          } else {
+            console.log('✅ 用户注册顺序无需修复');
+            cb();
+          }
+        });
+      }
 
-    // 修复话题成员角色
-    function fixTopicMemberRoles(callback) {
-      db.get("SELECT COUNT(*) as count FROM topic_members WHERE role IS NULL OR role = ''", (err, row) => {
-        if (err) {
-          console.error('检查话题成员角色错误:', err);
-          callback();
-          return;
-        }
+      // 修复话题成员角色
+      function fixTopicMemberRoles(cb) {
+        db.get("SELECT COUNT(*) as count FROM topic_members WHERE role IS NULL OR role = ''", (err, row) => {
+          if (err) {
+            console.error('检查话题成员角色错误:', err);
+            handleError(err);
+            cb();
+            return;
+          }
 
-        if (row && row.count > 0) {
-          console.log(`发现 ${row.count} 个话题成员需要修复角色...`);
-          
-          // 首先将所有成员设置为默认成员角色
-          db.run("UPDATE topic_members SET role = 'member' WHERE role IS NULL OR role = ''", (err) => {
+          if (row && row.count > 0) {
+            console.log(`发现 ${row.count} 个话题成员需要修复角色...`);
+            
+            // 首先将所有成员设置为默认成员角色
+            db.run("UPDATE topic_members SET role = 'member' WHERE role IS NULL OR role = ''", (err) => {
+              if (err) {
+                console.error('更新话题成员角色错误:', err);
+                handleError(err);
+                cb();
+                return;
+              }
+              
+              console.log('✅ 话题成员角色修复完成');
+              cb();
+            });
+          } else {
+            console.log('✅ 话题成员角色无需修复');
+            cb();
+          }
+        });
+      }
+
+      // 修复私聊消息已读状态
+      function fixPrivateMessageReadStatus(cb) {
+        db.get("SELECT COUNT(*) as count FROM private_messages WHERE is_read IS NULL", (err, row) => {
+          if (err) {
+            console.error('检查私聊消息已读状态错误:', err);
+            handleError(err);
+            cb();
+            return;
+          }
+
+          if (row && row.count > 0) {
+            console.log(`发现 ${row.count} 个私聊消息需要修复已读状态...`);
+            
+            // 将所有消息设置为未读
+            db.run("UPDATE private_messages SET is_read = 0 WHERE is_read IS NULL", (err) => {
+              if (err) {
+                console.error('更新私聊消息已读状态错误:', err);
+                handleError(err);
+                cb();
+                return;
+              }
+              
+              console.log('✅ 私聊消息已读状态修复完成');
+              cb();
+            });
+          } else {
+            console.log('✅ 私聊消息已读状态无需修复');
+            cb();
+          }
+        });
+      }
+
+      // 清理过期的密码重置令牌
+      function cleanExpiredResetTokens(cb) {
+        db.run(
+          "UPDATE users SET reset_token = NULL, reset_token_expires = NULL WHERE reset_token_expires <= datetime('now')",
+          function(err) {
             if (err) {
-              console.error('更新话题成员角色错误:', err);
-              callback();
+              console.error('清理过期密码重置令牌错误:', err);
+              handleError(err);
+              cb();
               return;
             }
             
-            console.log('✅ 话题成员角色修复完成');
-            callback();
-          });
-        } else {
-          console.log('✅ 话题成员角色无需修复');
-          callback();
-        }
-      });
-    }
-
-    // 修复私聊消息已读状态
-    function fixPrivateMessageReadStatus(callback) {
-      db.get("SELECT COUNT(*) as count FROM private_messages WHERE is_read IS NULL", (err, row) => {
-        if (err) {
-          console.error('检查私聊消息已读状态错误:', err);
-          callback();
-          return;
-        }
-
-        if (row && row.count > 0) {
-          console.log(`发现 ${row.count} 个私聊消息需要修复已读状态...`);
-          
-          // 将所有消息设置为未读
-          db.run("UPDATE private_messages SET is_read = 0 WHERE is_read IS NULL", (err) => {
-            if (err) {
-              console.error('更新私聊消息已读状态错误:', err);
-              callback();
-              return;
+            if (this.changes > 0) {
+              console.log(`✅ 清理了 ${this.changes} 个过期的密码重置令牌`);
+            } else {
+              console.log('✅ 没有需要清理的过期密码重置令牌');
             }
             
-            console.log('✅ 私聊消息已读状态修复完成');
-            callback();
-          });
-        } else {
-          console.log('✅ 私聊消息已读状态无需修复');
-          callback();
-        }
-      });
+            cb();
+          }
+        );
+      }
     }
   });
 }

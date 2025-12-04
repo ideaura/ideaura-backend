@@ -1,128 +1,250 @@
 const express = require('express');
-const http = require('http');
-const path = require('path');
 const cors = require('cors');
+const path = require('path');
+const fs = require('fs');
+const https = require('https');
 
-// 设置系统时区
-const { setProcessTimezone, getCalibratedTime } = require('./utils/timezone');
-setProcessTimezone();
-
-// 导入配置
-const config = require('./config');
-const { initializeDatabase } = require('./initialization/database');
-const { initMQTT } = require('./services/mqtt');
-const ntpClient = require('./services/ntpTime');
-
-// 导入路由
 const routes = require('./routes');
+const { initializeDatabase } = require('./initialization/database');
+const config = require('./config');
+const { initInternalMQTT } = require('./services/mqtt');
 
 const app = express();
-const server = http.createServer(app);
-
-// CORS配置 - 允许任何来源
-app.use(cors({
-  origin: '*', // 允许任何来源
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
-  credentials: false // 如果需要发送cookie，设置为true
-}));
+const PORT = config.port;
 
 // 中间件
+app.use(cors());
 app.use(express.json());
-app.use(express.static('public'));
+app.use(express.urlencoded({ extended: true }));
 
-// 日志中间件
-app.use(require('./middleware/logging'));
+// 提供静态文件服务
+app.use('/static', express.static(path.join(__dirname, 'public')));
 
-// 路由
+// API路由
 app.use('/api', routes);
 
-// 健康检查端点（包含NTP状态）
-app.get('/api/health', (req, res) => {
-  const ntpStatus = ntpClient.getStatus();
-  const calibratedTime = getCalibratedTime();
+// 重置密码页面
+app.get('/reset-password', (req, res) => {
+  const token = req.query.token;
   
-  res.json({
-    success: true,
-    data: {
-      status: 'OK',
-      timestamp: calibratedTime.toISOString(),
-      calibratedTime: calibratedTime.toISOString(),
-      systemTime: new Date().toISOString(),
-      mqttConnected: global.mqttClient ? global.mqttClient.connected : false,
-      connectedClients: global.connectedClients ? global.connectedClients.size : 0,
-      ntp: {
-        server: ntpStatus.server,
-        isSynced: ntpStatus.isSynced,
-        lastSync: ntpStatus.lastSync,
-        timeOffset: ntpStatus.timeOffset
-      }
-    }
-  });
-});
+  // 简单的HTML表单页面
+  const html = `
+  <!DOCTYPE html>
+  <html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>重置密码</title>
+  </head>
+  <body>
+    <div style="max-width: 400px; margin: 50px auto; padding: 20px; border: 1px solid #ccc; border-radius: 5px;">
+      <h2>重置密码</h2>
+      <form id="resetForm">
+        <input type="hidden" id="token" value="${token || ''}">
+        <div style="margin-bottom: 15px;">
+          <label for="password">新密码:</label><br>
+          <input type="password" id="password" required style="width: 100%; padding: 8px; margin-top: 5px;">
+        </div>
+        <div style="margin-bottom: 15px;">
+          <label for="confirmPassword">确认密码:</label><br>
+          <input type="password" id="confirmPassword" required style="width: 100%; padding: 8px; margin-top: 5px;">
+        </div>
+        <button type="submit" style="width: 100%; padding: 10px; background-color: #007bff; color: white; border: none; border-radius: 3px; cursor: pointer;">重置密码</button>
+      </form>
+      <div id="message" style="margin-top: 15px; padding: 10px; display: none;"></div>
+    </div>
 
-// NTP状态检查端点
-app.get('/api/ntp-status', (req, res) => {
-  const status = ntpClient.getStatus();
-  res.json({
-    success: true,
-    data: status
-  });
+    <script>
+      document.getElementById('resetForm').addEventListener('submit', async function(e) {
+        e.preventDefault();
+        
+        const token = document.getElementById('token').value;
+        const password = document.getElementById('password').value;
+        const confirmPassword = document.getElementById('confirmPassword').value;
+        const messageDiv = document.getElementById('message');
+        
+        // 清除之前的消息
+        messageDiv.style.display = 'none';
+        
+        // 验证密码
+        if (password.length < 8) {
+          showMessage('密码至少需要8个字符', 'error');
+          return;
+        }
+        
+        if (password !== confirmPassword) {
+          showMessage('两次输入的密码不一致', 'error');
+          return;
+        }
+        
+        // 如果没有令牌，显示错误
+        if (!token) {
+          showMessage('无效的重置链接', 'error');
+          return;
+        }
+        
+        try {
+          const response = await fetch('/api/auth/reset-password', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ token, password })
+          });
+          
+          const result = await response.json();
+          
+          if (result.success) {
+            showMessage(result.message, 'success');
+            // 重置密码成功后清空表单
+            document.getElementById('password').value = '';
+            document.getElementById('confirmPassword').value = '';
+          } else {
+            showMessage(result.message, 'error');
+          }
+        } catch (error) {
+          showMessage('发生错误，请稍后重试', 'error');
+        }
+      });
+      
+      function showMessage(text, type) {
+        const messageDiv = document.getElementById('message');
+        messageDiv.textContent = text;
+        messageDiv.style.display = 'block';
+        
+        if (type === 'error') {
+          messageDiv.style.backgroundColor = '#f8d7da';
+          messageDiv.style.color = '#721c24';
+          messageDiv.style.borderColor = '#f5c6cb';
+        } else {
+          messageDiv.style.backgroundColor = '#d4edda';
+          messageDiv.style.color = '#155724';
+          messageDiv.style.borderColor = '#c3e6cb';
+        }
+      }
+    </script>
+  </body>
+  </html>
+  `;
+  
+  res.send(html);
 });
 
 // 启动服务器
 async function startServer() {
   try {
-    // 启动NTP时间同步
-    ntpClient.startAutoSync();
-    
+    console.log('开始初始化数据库...');
+    // 初始化数据库
     await initializeDatabase();
-    console.log('数据库表初始化完成');
+    console.log('✅ 数据库初始化完成');
     
-    await initMQTT();
-    console.log('MQTT初始化完成');
+    console.log('准备启动服务器...');
+    let server;
     
-    server.listen(config.port, '0.0.0.0', () => {
-      console.log(`✅ 服务器运行在端口 ${config.port}`);
-      console.log(`✅ MQTT Broker: ${config.mqtt.broker}`);
-      console.log('✅ 实时消息通过MQTT广播');
-      console.log('✅ UTC+8时区模式已启用');
-      console.log('✅ NTP时间同步已启动');
+    // 检查是否启用SSL
+    if (config.ssl.enabled) {
+      console.log('🔒 SSL已启用');
+      try {
+        // 检查证书文件是否存在
+        if (!fs.existsSync(config.ssl.keyPath)) {
+          throw new Error(`SSL私钥文件不存在: ${config.ssl.keyPath}`);
+        }
+        if (!fs.existsSync(config.ssl.certPath)) {
+          throw new Error(`SSL证书文件不存在: ${config.ssl.certPath}`);
+        }
+        
+        // 读取SSL证书
+        const sslOptions = {
+          key: fs.readFileSync(config.ssl.keyPath),
+          cert: fs.readFileSync(config.ssl.certPath)
+        };
+        
+        // 如果有CA证书，也读取它
+        if (config.ssl.caPath && fs.existsSync(config.ssl.caPath)) {
+          sslOptions.ca = fs.readFileSync(config.ssl.caPath);
+        }
+        
+        // 创建HTTPS服务器
+        server = https.createServer(sslOptions, app);
+        console.log('✅ SSL证书加载成功');
+      } catch (error) {
+        console.error('SSL配置错误:', error.message);
+        console.log('⚠️  回退到HTTP服务器');
+        server = app.listen(0); // 先创建一个临时服务器
+      }
+    } else {
+      // 创建HTTP服务器
+      server = app.listen(0); // 先创建一个临时服务器
+    }
+    
+    // 启动服务器
+    server.listen(PORT, () => {
+      const protocol = config.ssl.enabled ? 'https' : 'http';
+      console.log(`🚀 服务器运行在 ${protocol}://localhost:${PORT}`);
+      console.log(`📡 MQTT代理: ${config.mqtt.broker}`);
     });
+    
+    // 初始化内部MQTT WebSocket服务器
+    try {
+      await initInternalMQTT(server);
+      console.log('✅ MQTT WebSocket服务器初始化完成');
+    } catch (error) {
+      console.error('MQTT WebSocket服务器初始化失败:', error);
+    }
+    
+    // 监听服务器启动错误
+    server.on('error', (error) => {
+      console.error('服务器启动错误:', error);
+    });
+    
+    // 设置定时任务，每小时清理一次过期的密码重置令牌
+    const User = require('./models/User');
+    setInterval(async () => {
+      try {
+        await User.cleanExpiredResetTokens();
+      } catch (error) {
+        console.error('清理过期密码重置令牌时出错:', error);
+      }
+    }, 60 * 60 * 1000); // 每小时执行一次
+    
+    // 优雅关闭
+    process.on('SIGINT', () => {
+      console.log('\\n正在关闭服务器...');
+      server.close(() => {
+        console.log('服务器已关闭');
+        process.exit(0);
+      });
+    });
+    
+    // 添加未捕获异常处理
+    process.on('uncaughtException', (error) => {
+      console.error('未捕获的异常:', error);
+      console.error('堆栈跟踪:', error.stack);
+      process.exit(1);
+    });
+    
+    process.on('unhandledRejection', (reason, promise) => {
+      console.error('未处理的Promise拒绝:', reason);
+      console.error('拒绝的Promise:', promise);
+      process.exit(1);
+    });
+    
   } catch (error) {
-    console.error('❌ 服务器启动失败:', error);
+    console.error('启动服务器时出错:', error);
+    console.error('错误堆栈:', error.stack);
     process.exit(1);
   }
 }
 
-// 优雅关闭
-process.on('SIGINT', () => {
-  console.log('正在关闭服务器...');
-  
-  // 停止NTP同步
-  ntpClient.stopAutoSync();
-  
-  if (global.mqttClient) {
-    global.mqttClient.end();
-    console.log('MQTT连接已关闭');
-  }
-  
-  const db = require('./config/database');
-  db.close((err) => {
-    if (err) {
-      console.error('关闭数据库错误:', err);
-    } else {
-      console.log('数据库连接已关闭');
-    }
-  });
-  
-  server.close(() => {
-    console.log('服务器已关闭');
-    process.exit(0);
-  });
-});
+module.exports = { app, startServer };
 
-// 启动应用
-startServer();
-
-module.exports = app;
+// 如果直接运行此文件，则启动服务器
+if (require.main === module) {
+  startServer().then(() => {
+    console.log('服务器启动完成');
+  }).catch((error) => {
+    console.error('启动服务器时出错:', error);
+    console.error('错误堆栈:', error.stack);
+    process.exit(1);
+  });
+}

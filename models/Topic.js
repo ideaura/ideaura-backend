@@ -55,6 +55,39 @@ class Topic {
     });
   }
 
+  // 获取用户加入的所有话题（带最新消息）
+  static findByUserWithLatestMessage(userId, limit = 50) {
+    return new Promise((resolve, reject) => {
+      db.all(
+        `SELECT t.*, u.username as creatorName
+         FROM topics t
+         LEFT JOIN users u ON t.created_by = u.id
+         INNER JOIN topic_members tm ON t.id = tm.topic_id
+         WHERE tm.user_id = ? AND t.is_active = 1
+         ORDER BY t.last_activity DESC, t.created_at DESC
+         LIMIT ?`,
+        [userId, limit],
+        async (err, rows) => {
+          if (err) return reject(err);
+          
+          // 为每个话题获取最新消息
+          const topicsWithLatestMessage = await Promise.all(rows.map(async (topic) => {
+            const latestMessage = await require('./Message').getLatestMessageByTopic(topic.id);
+            return {
+              ...topic,
+              latestMessage: latestMessage ? {
+                content: `${latestMessage.senderName}：${latestMessage.content}`,
+                createdAt: latestMessage.created_at
+              } : null
+            };
+          }));
+          
+          resolve(topicsWithLatestMessage);
+        }
+      );
+    });
+  }
+
   // 获取推荐话题 - 消息数较多的话题
   static getPopularTopics(limit = 10) {
     return new Promise((resolve, reject) => {
@@ -71,6 +104,40 @@ class Topic {
         (err, rows) => {
           if (err) return reject(err);
           resolve(rows);
+        }
+      );
+    });
+  }
+
+  // 获取推荐话题 - 消息数较多的话题（带最新消息）
+  static getPopularTopicsWithLatestMessage(limit = 10) {
+    return new Promise((resolve, reject) => {
+      db.all(
+        `SELECT t.*, u.username as creatorName, COUNT(m.id) as message_count
+         FROM topics t
+         LEFT JOIN users u ON t.created_by = u.id
+         LEFT JOIN messages m ON t.id = m.topic_id
+         WHERE t.is_active = 1
+         GROUP BY t.id
+         ORDER BY message_count DESC, t.last_activity DESC
+         LIMIT ?`,
+        [limit],
+        async (err, rows) => {
+          if (err) return reject(err);
+          
+          // 为每个话题获取最新消息
+          const topicsWithLatestMessage = await Promise.all(rows.map(async (topic) => {
+            const latestMessage = await require('./Message').getLatestMessageByTopic(topic.id);
+            return {
+              ...topic,
+              latestMessage: latestMessage ? {
+                content: `${latestMessage.senderName}：${latestMessage.content}`,
+                createdAt: latestMessage.created_at
+              } : null
+            };
+          }));
+          
+          resolve(topicsWithLatestMessage);
         }
       );
     });
@@ -96,6 +163,39 @@ class Topic {
     });
   }
 
+  // 获取推荐话题 - 近期活跃的话题（7天内有人发消息，带最新消息）
+  static getRecentActiveTopicsWithLatestMessage(limit = 10) {
+    return new Promise((resolve, reject) => {
+      db.all(
+        `SELECT t.*, u.username as creatorName
+         FROM topics t
+         LEFT JOIN users u ON t.created_by = u.id
+         WHERE t.is_active = 1 
+         AND t.last_activity >= datetime('now', '-7 days', 'localtime')
+         ORDER BY t.last_activity DESC
+         LIMIT ?`,
+        [limit],
+        async (err, rows) => {
+          if (err) return reject(err);
+          
+          // 为每个话题获取最新消息
+          const topicsWithLatestMessage = await Promise.all(rows.map(async (topic) => {
+            const latestMessage = await require('./Message').getLatestMessageByTopic(topic.id);
+            return {
+              ...topic,
+              latestMessage: latestMessage ? {
+                content: `${latestMessage.senderName}：${latestMessage.content}`,
+                createdAt: latestMessage.created_at
+              } : null
+            };
+          }));
+          
+          resolve(topicsWithLatestMessage);
+        }
+      );
+    });
+  }
+
   // 获取推荐话题 - 新创建的话题
   static getNewTopics(limit = 10) {
     return new Promise((resolve, reject) => {
@@ -110,6 +210,38 @@ class Topic {
         (err, rows) => {
           if (err) return reject(err);
           resolve(rows);
+        }
+      );
+    });
+  }
+
+  // 获取推荐话题 - 新创建的话题（带最新消息）
+  static getNewTopicsWithLatestMessage(limit = 10) {
+    return new Promise((resolve, reject) => {
+      db.all(
+        `SELECT t.*, u.username as creatorName
+         FROM topics t
+         LEFT JOIN users u ON t.created_by = u.id
+         WHERE t.is_active = 1
+         ORDER BY t.created_at DESC
+         LIMIT ?`,
+        [limit],
+        async (err, rows) => {
+          if (err) return reject(err);
+          
+          // 为每个话题获取最新消息
+          const topicsWithLatestMessage = await Promise.all(rows.map(async (topic) => {
+            const latestMessage = await require('./Message').getLatestMessageByTopic(topic.id);
+            return {
+              ...topic,
+              latestMessage: latestMessage ? {
+                content: `${latestMessage.senderName}：${latestMessage.content}`,
+                createdAt: latestMessage.created_at
+              } : null
+            };
+          }));
+          
+          resolve(topicsWithLatestMessage);
         }
       );
     });
@@ -135,28 +267,63 @@ class Topic {
     });
   }
 
-  // 搜索话题（按名称或ID，显示所有话题供用户加入）
+  // 获取所有话题（仅用户加入的，带最新消息）
+  static findAllWithLatestMessage(userId, limit = 50) {
+    return new Promise((resolve, reject) => {
+      db.all(
+        `SELECT t.*, u.username as creatorName
+         FROM topics t
+         LEFT JOIN users u ON t.created_by = u.id
+         INNER JOIN topic_members tm ON t.id = tm.topic_id
+         WHERE tm.user_id = ? AND t.is_active = 1
+         ORDER BY t.last_activity DESC, t.created_at DESC
+         LIMIT ?`,
+        [userId, limit],
+        async (err, rows) => {
+          if (err) return reject(err);
+          
+          // 为每个话题获取最新消息
+          const topicsWithLatestMessage = await Promise.all(rows.map(async (topic) => {
+            const latestMessage = await require('./Message').getLatestMessageByTopic(topic.id);
+            return {
+              ...topic,
+              latestMessage: latestMessage ? {
+                content: `${latestMessage.senderName}：${latestMessage.content}`,
+                createdAt: latestMessage.created_at
+              } : null
+            };
+          }));
+          
+          resolve(topicsWithLatestMessage);
+        }
+      );
+    });
+  }
+
+  // 搜索话题（按名称或ID，仅显示非私有话题或用户已加入的私有话题）
   static search(query, userId, limit = 50) {
     return new Promise((resolve, reject) => {
       // 如果查询是数字，按ID搜索；否则按名称搜索
       let sql, params;
       if (!isNaN(query)) {
-        // 按ID搜索（所有话题）
+        // 按ID搜索（仅非私有话题或用户已加入的私有话题）
         sql = `SELECT t.*, u.username as creatorName
                FROM topics t
                LEFT JOIN users u ON t.created_by = u.id
-               WHERE t.id = ? AND t.is_active = 1
+               LEFT JOIN topic_members tm ON t.id = tm.topic_id AND tm.user_id = ?
+               WHERE t.id = ? AND t.is_active = 1 AND (t.is_private = 0 OR tm.user_id IS NOT NULL)
                LIMIT ?`;
-        params = [parseInt(query), limit];
+        params = [userId, parseInt(query), limit];
       } else {
-        // 按名称搜索（所有话题）
+        // 按名称搜索（仅非私有话题或用户已加入的私有话题）
         sql = `SELECT t.*, u.username as creatorName
                FROM topics t
                LEFT JOIN users u ON t.created_by = u.id
-               WHERE t.name LIKE ? AND t.is_active = 1
+               LEFT JOIN topic_members tm ON t.id = tm.topic_id AND tm.user_id = ?
+               WHERE t.name LIKE ? AND t.is_active = 1 AND (t.is_private = 0 OR tm.user_id IS NOT NULL)
                ORDER BY t.last_activity DESC, t.created_at DESC
                LIMIT ?`;
-        params = [`%${query}%`, limit];
+        params = [userId, `%${query}%`, limit];
       }
       
       db.all(sql, params, (err, rows) => {
@@ -172,6 +339,52 @@ class Topic {
         });
         
         Promise.all(topicPromises).then(resolve).catch(reject);
+      });
+    });
+  }
+
+  // 搜索话题（按名称或ID，仅显示非私有话题或用户已加入的私有话题，带最新消息）
+  static searchWithLatestMessage(query, userId, limit = 50) {
+    return new Promise((resolve, reject) => {
+      // 如果查询是数字，按ID搜索；否则按名称搜索
+      let sql, params;
+      if (!isNaN(query)) {
+        // 按ID搜索（仅非私有话题或用户已加入的私有话题）
+        sql = `SELECT t.*, u.username as creatorName
+               FROM topics t
+               LEFT JOIN users u ON t.created_by = u.id
+               LEFT JOIN topic_members tm ON t.id = tm.topic_id AND tm.user_id = ?
+               WHERE t.id = ? AND t.is_active = 1 AND (t.is_private = 0 OR tm.user_id IS NOT NULL)
+               LIMIT ?`;
+        params = [userId, parseInt(query), limit];
+      } else {
+        // 按名称搜索（仅非私有话题或用户已加入的私有话题）
+        sql = `SELECT t.*, u.username as creatorName
+               FROM topics t
+               LEFT JOIN users u ON t.created_by = u.id
+               LEFT JOIN topic_members tm ON t.id = tm.topic_id AND tm.user_id = ?
+               WHERE t.name LIKE ? AND t.is_active = 1 AND (t.is_private = 0 OR tm.user_id IS NOT NULL)
+               ORDER BY t.last_activity DESC, t.created_at DESC
+               LIMIT ?`;
+        params = [userId, `%${query}%`, limit];
+      }
+      
+      db.all(sql, params, async (err, rows) => {
+        if (err) return reject(err);
+        
+        // 为每个话题获取最新消息
+        const topicsWithLatestMessage = await Promise.all(rows.map(async (topic) => {
+          const latestMessage = await require('./Message').getLatestMessageByTopic(topic.id);
+          return {
+            ...topic,
+            latestMessage: latestMessage ? {
+              content: `${latestMessage.senderName}：${latestMessage.content}`,
+              createdAt: latestMessage.created_at
+            } : null
+          };
+        }));
+        
+        resolve(topicsWithLatestMessage);
       });
     });
   }
@@ -429,7 +642,7 @@ class Topic {
     });
   }
 
-  // 修改话题名称和介绍
+  // 修改话题信息
   static updateTopic(topicId, userId, updates) {
     return new Promise((resolve, reject) => {
       const { name, description } = updates;
@@ -471,6 +684,33 @@ class Topic {
             if (err) return reject(err);
             resolve({ changes: this.changes });
           });
+        }
+      );
+    });
+  }
+
+  // 修改话题私有状态
+  static updatePrivateStatus(topicId, userId, isPrivate) {
+    return new Promise((resolve, reject) => {
+      // 只有创建者可以修改话题的私有状态
+      db.get(
+        "SELECT 1 FROM topic_members WHERE topic_id = ? AND user_id = ? AND role = 'creator'",
+        [topicId, userId],
+        (err, row) => {
+          if (err) return reject(err);
+          
+          if (!row) {
+            return reject(new Error('只有话题创建者可以修改话题的私有状态'));
+          }
+          
+          db.run(
+            "UPDATE topics SET is_private = ? WHERE id = ?",
+            [isPrivate ? 1 : 0, topicId],
+            function(err) {
+              if (err) return reject(err);
+              resolve({ changes: this.changes });
+            }
+          );
         }
       );
     });

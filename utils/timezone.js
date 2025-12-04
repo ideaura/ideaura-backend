@@ -2,7 +2,14 @@
  * 时区处理工具函数 - UTC+8 中国时区
  */
 
-const ntpClient = require('../services/ntpTime');
+// 延迟加载ntpClient以避免循环依赖
+let ntpClient = null;
+function getNtpClient() {
+  if (!ntpClient) {
+    ntpClient = require('../services/ntpTime');
+  }
+  return ntpClient;
+}
 
 // 设置时区为亚洲/上海 (UTC+8)
 const TIMEZONE = 'Asia/Shanghai';
@@ -10,8 +17,14 @@ const UTC_OFFSET = 8 * 60 * 60 * 1000; // UTC+8 的毫秒数
 
 // 获取校准后的当前时间（优先使用NTP时间）
 function getCalibratedTime() {
-  if (ntpClient.getStatus().isSynced) {
-    return ntpClient.getCalibratedTime();
+  try {
+    const client = getNtpClient();
+    if (client.getStatus().isSynced) {
+      return client.getCalibratedTime();
+    }
+  } catch (error) {
+    // 如果NTP客户端不可用，使用备用方案
+    console.warn('NTP客户端不可用，使用系统时间:', error.message);
   }
   // 备用方案：系统时间（不需要额外的时区偏移，因为系统已经是本地时间）
   return new Date();
@@ -130,6 +143,49 @@ function formatLocalTime(date, includeTime = true) {
   }
 }
 
+// 格式化消息时间为中文格式（如：2025年11月6日 12:00）
+function formatMessageTime(date) {
+  if (!date) return '';
+  
+  const d = typeof date === 'string' ? parseDatabaseTime(date) : date;
+  
+  if (isNaN(d.getTime())) {
+    console.error('无效的日期:', date);
+    return '无效日期';
+  }
+  
+  try {
+    // 确保时间是UTC+8
+    const localDate = new Date(d.getTime());
+    
+    const now = getCalibratedTime();
+    const isToday = localDate.toDateString() === now.toDateString();
+    const isYesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000).toDateString() === localDate.toDateString();
+    
+    const year = localDate.getFullYear();
+    const month = localDate.getMonth() + 1;
+    const day = localDate.getDate();
+    const hours = String(localDate.getHours()).padStart(2, '0');
+    const minutes = String(localDate.getMinutes()).padStart(2, '0');
+    
+    // 如果是今天，只显示时间
+    if (isToday) {
+      return `${hours}:${minutes}`;
+    }
+    
+    // 如果是昨天，显示"昨天 HH:MM"
+    if (isYesterday) {
+      return `昨天 ${hours}:${minutes}`;
+    }
+    
+    // 其他日期显示完整格式
+    return `${year}年${month}月${day}日 ${hours}:${minutes}`;
+  } catch (error) {
+    console.error('格式化消息时间错误:', error);
+    return '时间格式错误';
+  }
+}
+
 // 获取当前UTC+8时间戳（用于数据库存储）
 function getCurrentTimestamp() {
   return getCalibratedTime();
@@ -193,6 +249,7 @@ module.exports = {
   getLocalTime,
   parseDatabaseTime,
   formatLocalTime,
+  formatMessageTime,
   getRelativeTime,
   getCurrentTimestamp,
   getDatabaseTimeString,

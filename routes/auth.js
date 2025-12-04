@@ -4,7 +4,7 @@ const router = express.Router();
 
 const User = require('../models/User');
 const { generateToken, generateJWT } = require('../utils/tokens');
-const { sendVerificationEmail } = require('../services/email');
+const { sendVerificationEmail, sendPasswordResetEmail } = require('../services/email');
 const { validateEmail, validateUsername, validatePassword } = require('../utils/validators');
 const { authenticateToken } = require('../middleware/auth');
 
@@ -147,6 +147,199 @@ router.post('/auth/resend-verification', async (req, res) => {
     }
   } catch (error) {
     console.error("重新发送验证邮件错误:", error);
+    res.status(500).json({ 
+      success: false, 
+      message: '服务器错误' 
+    });
+  }
+});
+
+// 忘记密码 - 通过邮箱发送重置链接
+router.post('/auth/forgot-password/email', async (req, res) => {
+  const { email } = req.body;
+  
+  if (!email) {
+    return res.status(400).json({ 
+      success: false, 
+      message: '邮箱地址必填' 
+    });
+  }
+  
+  if (!validateEmail(email)) {
+    return res.status(400).json({ 
+      success: false, 
+      message: '邮箱格式不正确' 
+    });
+  }
+  
+  try {
+    const user = await User.findByEmail(email);
+    if (!user) {
+      // 为了安全，即使邮箱不存在也返回成功信息
+      return res.json({
+        success: true,
+        message: '如果该邮箱已注册，重置密码的链接已发送到您的邮箱'
+      });
+    }
+    
+    const resetToken = await User.createPasswordResetToken(email);
+    if (!resetToken) {
+      return res.status(500).json({ 
+        success: false, 
+        message: '生成重置令牌失败' 
+      });
+    }
+    
+    try {
+      await sendPasswordResetEmail(email, resetToken);
+      res.json({
+        success: true,
+        message: '重置密码的链接已发送到您的邮箱'
+      });
+    } catch (emailError) {
+      console.error("发送重置密码邮件错误:", emailError);
+      res.status(500).json({ 
+        success: false, 
+        message: '发送重置密码邮件失败' 
+      });
+    }
+  } catch (error) {
+    console.error("处理忘记密码请求错误:", error);
+    res.status(500).json({ 
+      success: false, 
+      message: '服务器错误' 
+    });
+  }
+});
+
+// 忘记密码 - 通过用户名发送重置链接
+router.post('/auth/forgot-password/username', async (req, res) => {
+  const { username } = req.body;
+  
+  if (!username) {
+    return res.status(400).json({ 
+      success: false, 
+      message: '用户名必填' 
+    });
+  }
+  
+  try {
+    const user = await User.findByUsername(username);
+    if (!user) {
+      // 为了安全，即使用户名不存在也返回成功信息
+      return res.json({
+        success: true,
+        message: '如果该用户名已注册，重置密码的链接已发送到注册邮箱'
+      });
+    }
+    
+    const resetToken = await User.createPasswordResetToken(user.email);
+    if (!resetToken) {
+      return res.status(500).json({ 
+        success: false, 
+        message: '生成重置令牌失败' 
+      });
+    }
+    
+    try {
+      await sendPasswordResetEmail(user.email, resetToken);
+      res.json({
+        success: true,
+        message: '重置密码的链接已发送到您的注册邮箱'
+      });
+    } catch (emailError) {
+      console.error("发送重置密码邮件错误:", emailError);
+      res.status(500).json({ 
+        success: false, 
+        message: '发送重置密码邮件失败' 
+      });
+    }
+  } catch (error) {
+    console.error("处理忘记密码请求错误:", error);
+    res.status(500).json({ 
+      success: false, 
+      message: '服务器错误' 
+    });
+  }
+});
+
+// 重置密码页面验证令牌
+router.get('/auth/reset-password/validate', async (req, res) => {
+  const { token } = req.query;
+  
+  if (!token) {
+    return res.status(400).json({ 
+      success: false, 
+      message: '无效的重置链接' 
+    });
+  }
+  
+  try {
+    const user = await User.validatePasswordResetToken(token);
+    if (!user) {
+      return res.status(400).json({ 
+        success: false, 
+        message: '重置链接已过期或无效' 
+      });
+    }
+    
+    res.json({
+      success: true,
+      message: '重置链接有效',
+      data: {
+        username: user.username
+      }
+    });
+  } catch (error) {
+    console.error("验证重置密码令牌错误:", error);
+    res.status(500).json({ 
+      success: false, 
+      message: '服务器错误' 
+    });
+  }
+});
+
+// 重置密码
+router.post('/auth/reset-password', async (req, res) => {
+  const { token, password } = req.body;
+  
+  if (!token || !password) {
+    return res.status(400).json({ 
+      success: false, 
+      message: '重置令牌和新密码为必填项' 
+    });
+  }
+  
+  if (!validatePassword(password)) {
+    return res.status(400).json({ 
+      success: false, 
+      message: '密码至少需要8个字符' 
+    });
+  }
+  
+  try {
+    const isValid = await User.validatePasswordResetToken(token);
+    if (!isValid) {
+      return res.status(400).json({ 
+        success: false, 
+        message: '重置链接已过期或无效' 
+      });
+    }
+    
+    const success = await User.resetPassword(token, password);
+    if (!success) {
+      return res.status(500).json({ 
+        success: false, 
+        message: '重置密码失败' 
+      });
+    }
+    
+    res.json({
+      success: true,
+      message: '密码重置成功，您现在可以使用新密码登录'
+    });
+  } catch (error) {
+    console.error("重置密码错误:", error);
     res.status(500).json({ 
       success: false, 
       message: '服务器错误' 

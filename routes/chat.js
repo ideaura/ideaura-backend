@@ -4,31 +4,26 @@ const router = express.Router();
 const Topic = require('../models/Topic');
 const Message = require('../models/Message');
 const User = require('../models/User');
-const { broadcastMessage } = require('../services/mqtt');
+const { broadcastMessage, generateUserInboxTopic } = require('../services/mqtt');
 const { validateTopicName, validateTopicDescription } = require('../utils/validators');
 const { getCalibratedTime } = require('../utils/timezone');
 const { authenticateToken } = require('../middleware/auth');
 
-// 获取推荐话题
-router.get('/chat/topics/recommended', authenticateToken, async (req, res) => {
+// 获取用户个人收件箱主题名称
+router.get('/chat/user-inbox-topic', authenticateToken, (req, res) => {
   try {
-    const limit = parseInt(req.query.limit) || 10;
-    
-    // 获取三类推荐话题
-    const popularTopics = await Topic.getPopularTopics(limit);
-    const recentActiveTopics = await Topic.getRecentActiveTopics(limit);
-    const newTopics = await Topic.getNewTopics(limit);
+    const userId = req.user.id;
+    const inboxTopic = generateUserInboxTopic(userId);
     
     res.json({
       success: true,
       data: {
-        popular: popularTopics,
-        recentActive: recentActiveTopics,
-        new: newTopics
+        inboxTopic: inboxTopic,
+        userId: userId
       }
     });
   } catch (error) {
-    console.error("获取推荐话题错误:", error);
+    console.error("获取用户收件箱主题错误:", error);
     res.status(500).json({ 
       success: false, 
       message: '服务器错误' 
@@ -36,11 +31,11 @@ router.get('/chat/topics/recommended', authenticateToken, async (req, res) => {
   }
 });
 
-// 获取用户加入的话题列表
+// 获取用户加入的话题列表（带最新消息）
 router.get('/chat/topics', authenticateToken, async (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 50;
-    const topics = await Topic.findByUser(req.user.id, limit);
+    const topics = await Topic.findByUserWithLatestMessage(req.user.id, limit);
     
     res.json({
       success: true,
@@ -55,11 +50,11 @@ router.get('/chat/topics', authenticateToken, async (req, res) => {
   }
 });
 
-// 获取所有话题列表（仅用户加入的）
+// 获取所有话题列表（仅用户加入的，带最新消息）
 router.get('/chat/topics/all', authenticateToken, async (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 50;
-    const topics = await Topic.findAll(req.user.id, limit);
+    const topics = await Topic.findAllWithLatestMessage(req.user.id, limit);
     
     res.json({
       success: true,
@@ -74,7 +69,7 @@ router.get('/chat/topics/all', authenticateToken, async (req, res) => {
   }
 });
 
-// 搜索话题（按名称或ID）
+// 搜索话题（按名称或ID，带最新消息）
 router.get('/chat/topics/search', authenticateToken, async (req, res) => {
   try {
     const { query, limit = 50 } = req.query;
@@ -86,7 +81,7 @@ router.get('/chat/topics/search', authenticateToken, async (req, res) => {
       });
     }
 
-    const topics = await Topic.search(query.trim(), req.user.id, parseInt(limit));
+    const topics = await Topic.searchWithLatestMessage(query.trim(), req.user.id, parseInt(limit));
     
     res.json({
       success: true,
@@ -94,6 +89,33 @@ router.get('/chat/topics/search', authenticateToken, async (req, res) => {
     });
   } catch (error) {
     console.error("搜索话题错误:", error);
+    res.status(500).json({ 
+      success: false, 
+      message: '服务器错误' 
+    });
+  }
+});
+
+// 获取推荐话题（带最新消息）
+router.get('/chat/topics/recommended', authenticateToken, async (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit) || 10;
+    
+    // 获取三类推荐话题
+    const popularTopics = await Topic.getPopularTopicsWithLatestMessage(limit);
+    const recentActiveTopics = await Topic.getRecentActiveTopicsWithLatestMessage(limit);
+    const newTopics = await Topic.getNewTopicsWithLatestMessage(limit);
+    
+    res.json({
+      success: true,
+      data: {
+        popular: popularTopics,
+        recentActive: recentActiveTopics,
+        new: newTopics
+      }
+    });
+  } catch (error) {
+    console.error("获取推荐话题错误:", error);
     res.status(500).json({ 
       success: false, 
       message: '服务器错误' 
@@ -143,6 +165,9 @@ router.post('/chat/messages', authenticateToken, async (req, res) => {
     });
 
     const message = await Message.findById(messageId);
+    
+    // 输出调试信息
+    console.log('准备广播的消息:', JSON.stringify(message, null, 2));
     
     // 广播消息给所有连接的客户端
     broadcastMessage(message);
@@ -197,6 +222,9 @@ router.post('/chat/private-messages', authenticateToken, async (req, res) => {
       content: content.trim()
     });
 
+    // 输出调试信息
+    console.log('准备广播的私聊消息:', JSON.stringify(privateMessage, null, 2));
+    
     // 广播私聊消息（现在使用安全的主题）
     broadcastMessage({
       ...privateMessage,
@@ -217,13 +245,13 @@ router.post('/chat/private-messages', authenticateToken, async (req, res) => {
   }
 });
 
-// 获取聊天室消息历史（包含所有消息）
+// 获取聊天室消息历史（仅公共聊天室消息）
 router.get('/chat/messages', authenticateToken, async (req, res) => {
   const limit = parseInt(req.query.limit) || 50;
   const offset = parseInt(req.query.offset) || 0;
 
   try {
-    const messages = await Message.findByChatroom(limit, offset);
+    const messages = await Message.findPublicChatroomMessages(limit, offset);
     
     res.json({
       success: true,
@@ -277,6 +305,27 @@ router.get('/chat/topics/:topicId/messages', authenticateToken, async (req, res)
     });
   } catch (error) {
     console.error("获取话题消息历史错误:", error);
+    res.status(500).json({ 
+      success: false, 
+      message: '服务器错误' 
+    });
+  }
+});
+
+// 获取与当前用户有过私聊的所有用户（带最新消息）
+router.get('/chat/private-messages/users', authenticateToken, async (req, res) => {
+  const userId = req.user.id;
+
+  try {
+    const users = await Message.getPrivateChatUsersWithLatestMessage(userId);
+    
+    res.json({
+      success: true,
+      data: users,
+      total: users.length
+    });
+  } catch (error) {
+    console.error("获取私聊用户列表错误:", error);
     res.status(500).json({ 
       success: false, 
       message: '服务器错误' 
@@ -740,6 +789,58 @@ router.put('/chat/topics/:topicId', authenticateToken, async (req, res) => {
     });
   } catch (error) {
     console.error("修改话题信息错误:", error);
+    res.status(500).json({ 
+      success: false, 
+      message: error.message || '服务器错误' 
+    });
+  }
+});
+
+// 修改话题私有状态
+router.put('/chat/topics/:topicId/private', authenticateToken, async (req, res) => {
+  const topicId = req.params.topicId;
+  const userId = req.user.id;
+  const { is_private } = req.body;
+
+  // 验证话题ID
+  if (isNaN(topicId)) {
+    return res.status(400).json({ 
+      success: false, 
+      message: '话题ID无效' 
+    });
+  }
+
+  // 验证参数
+  if (is_private === undefined) {
+    return res.status(400).json({ 
+      success: false, 
+      message: 'is_private 参数为必填项' 
+    });
+  }
+
+  try {
+    // 验证话题是否存在
+    const topic = await Topic.findById(topicId);
+    if (!topic) {
+      return res.status(404).json({ 
+        success: false, 
+        message: '话题不存在' 
+      });
+    }
+
+    // 更新话题私有状态（只有创建者可以操作）
+    const result = await Topic.updatePrivateStatus(topicId, userId, is_private);
+    
+    // 获取更新后的话题信息
+    const updatedTopic = await Topic.findById(topicId);
+    
+    res.json({
+      success: true,
+      message: `话题已设置为${is_private ? '私有' : '公开'}`,
+      data: updatedTopic
+    });
+  } catch (error) {
+    console.error("修改话题私有状态错误:", error);
     res.status(500).json({ 
       success: false, 
       message: error.message || '服务器错误' 

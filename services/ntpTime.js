@@ -1,5 +1,5 @@
 const dgram = require('dgram');
-const { getCurrentTimestamp } = require('../utils/timezone');
+// 移除对 timezone.js 的依赖，避免循环依赖
 
 class NTPClient {
   constructor(server = 'ntp.ntsc.ac.cn', port = 123) {

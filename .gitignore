@@ -133,5 +133,6 @@ dist
 # 聊天室数据文件
 .env*
 data/
+ssl/
 
 
