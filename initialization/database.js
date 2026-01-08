@@ -10,7 +10,7 @@ function initializeDatabase() {
         name: 'users',
         schema: `CREATE TABLE users (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
-          username TEXT UNIQUE NOT NULL,
+          username TEXT NOT NULL,
           email TEXT UNIQUE NOT NULL,
           password TEXT NOT NULL,
           email_verified INTEGER DEFAULT 0,
@@ -53,6 +53,7 @@ function initializeDatabase() {
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           name TEXT NOT NULL UNIQUE,
           description TEXT,
+          announcement TEXT,
           created_by INTEGER NOT NULL,
           is_private BOOLEAN DEFAULT 1, -- 默认为私有话题
           is_active BOOLEAN DEFAULT 1,
@@ -73,7 +74,8 @@ function initializeDatabase() {
           { name: 'is_private', type: 'BOOLEAN', default: '1' },
           { name: 'is_active', type: 'BOOLEAN', default: '1' },
           { name: 'message_count', type: 'INTEGER', default: '0' },
-          { name: 'last_activity', type: 'DATETIME' }
+          { name: 'last_activity', type: 'DATETIME' },
+          { name: 'announcement', type: 'TEXT' }
         ]
       },
       {
@@ -104,12 +106,46 @@ function initializeDatabase() {
           topic_id INTEGER,
           user_id INTEGER NOT NULL,
           content TEXT NOT NULL,
-          created_at DATETIME DEFAULT (datetime('now', 'localtime')) -- 使用本地时间(UTC+8)
+          created_at DATETIME DEFAULT (datetime('now', 'localtime')), -- 使用本地时间(UTC+8)
+          updated_at DATETIME, -- 编辑时间
+          deleted_at DATETIME, -- 删除时间
+          is_deleted BOOLEAN DEFAULT 0, -- 是否已删除
+          quoted_message_id INTEGER, -- 引用的消息ID
+          message_type TEXT DEFAULT 'normal', -- 消息类型: normal, forwarded, system
+          message_subtype TEXT DEFAULT 'text', -- 基本消息类型: text, image, video, file, markdown, html
+          forward_source_id INTEGER, -- 转发来源消息ID
+          file_url TEXT, -- 文件URL
+          file_name TEXT, -- 文件名
+          file_size INTEGER, -- 文件大小
+          file_type TEXT, -- 文件MIME类型
+          FOREIGN KEY (quoted_message_id) REFERENCES messages(id) ON DELETE SET NULL,
+          FOREIGN KEY (forward_source_id) REFERENCES messages(id) ON DELETE SET NULL
         )`,
         indexes: [
           'CREATE INDEX IF NOT EXISTS idx_messages_topic_id ON messages(topic_id)',
           'CREATE INDEX IF NOT EXISTS idx_messages_user_id ON messages(user_id)',
-          'CREATE INDEX IF NOT EXISTS idx_messages_created_at ON messages(created_at)'
+          'CREATE INDEX IF NOT EXISTS idx_messages_created_at ON messages(created_at)',
+          'CREATE INDEX IF NOT EXISTS idx_messages_updated_at ON messages(updated_at)',
+          'CREATE INDEX IF NOT EXISTS idx_messages_deleted_at ON messages(deleted_at)',
+          'CREATE INDEX IF NOT EXISTS idx_messages_is_deleted ON messages(is_deleted)',
+          'CREATE INDEX IF NOT EXISTS idx_messages_quoted_message_id ON messages(quoted_message_id)',
+          'CREATE INDEX IF NOT EXISTS idx_messages_message_type ON messages(message_type)',
+          'CREATE INDEX IF NOT EXISTS idx_messages_message_subtype ON messages(message_subtype)',
+          'CREATE INDEX IF NOT EXISTS idx_messages_forward_source_id ON messages(forward_source_id)',
+          'CREATE INDEX IF NOT EXISTS idx_messages_file_type ON messages(file_type)'
+        ],
+        columns: [
+          { name: 'updated_at', type: 'DATETIME' },
+          { name: 'deleted_at', type: 'DATETIME' },
+          { name: 'is_deleted', type: 'BOOLEAN', default: '0' },
+          { name: 'quoted_message_id', type: 'INTEGER' },
+          { name: 'message_type', type: 'TEXT', default: "'normal'" },
+          { name: 'message_subtype', type: 'TEXT', default: "'text'" },
+          { name: 'forward_source_id', type: 'INTEGER' },
+          { name: 'file_url', type: 'TEXT' },
+          { name: 'file_name', type: 'TEXT' },
+          { name: 'file_size', type: 'INTEGER' },
+          { name: 'file_type', type: 'TEXT' }
         ]
       },
       {
@@ -120,17 +156,48 @@ function initializeDatabase() {
           receiver_id INTEGER NOT NULL,
           content TEXT NOT NULL,
           is_read BOOLEAN DEFAULT 0,
-          created_at DATETIME DEFAULT (datetime('now', 'localtime')) -- 使用本地时间(UTC+8)
+          created_at DATETIME DEFAULT (datetime('now', 'localtime')), -- 使用本地时间(UTC+8)
+          updated_at DATETIME, -- 编辑时间
+          deleted_at DATETIME, -- 删除时间
+          is_deleted BOOLEAN DEFAULT 0, -- 是否已删除
+          quoted_message_id INTEGER, -- 引用的消息ID
+          message_type TEXT DEFAULT 'normal', -- 消息类型: normal, forwarded, system
+          message_subtype TEXT DEFAULT 'text', -- 基本消息类型: text, image, video, file, markdown, html
+          forward_source_id INTEGER, -- 转发来源消息ID
+          file_url TEXT, -- 文件URL
+          file_name TEXT, -- 文件名
+          file_size INTEGER, -- 文件大小
+          file_type TEXT, -- 文件MIME类型
+          FOREIGN KEY (quoted_message_id) REFERENCES private_messages(id) ON DELETE SET NULL
         )`,
         indexes: [
           'CREATE INDEX IF NOT EXISTS idx_private_messages_sender_id ON private_messages(sender_id)',
           'CREATE INDEX IF NOT EXISTS idx_private_messages_receiver_id ON private_messages(receiver_id)',
           'CREATE INDEX IF NOT EXISTS idx_private_messages_is_read ON private_messages(is_read)',
-          'CREATE INDEX IF NOT EXISTS idx_private_messages_created_at ON private_messages(created_at)'
+          'CREATE INDEX IF NOT EXISTS idx_private_messages_created_at ON private_messages(created_at)',
+          'CREATE INDEX IF NOT EXISTS idx_private_messages_updated_at ON private_messages(updated_at)',
+          'CREATE INDEX IF NOT EXISTS idx_private_messages_deleted_at ON private_messages(deleted_at)',
+          'CREATE INDEX IF NOT EXISTS idx_private_messages_is_deleted ON private_messages(is_deleted)',
+          'CREATE INDEX IF NOT EXISTS idx_private_messages_quoted_message_id ON private_messages(quoted_message_id)',
+          'CREATE INDEX IF NOT EXISTS idx_private_messages_message_type ON private_messages(message_type)',
+          'CREATE INDEX IF NOT EXISTS idx_private_messages_message_subtype ON private_messages(message_subtype)',
+          'CREATE INDEX IF NOT EXISTS idx_private_messages_forward_source_id ON private_messages(forward_source_id)',
+          'CREATE INDEX IF NOT EXISTS idx_private_messages_file_type ON private_messages(file_type)'
         ],
         // 定义需要检查和可能添加的列
         columns: [
-          { name: 'is_read', type: 'BOOLEAN', default: '0' }
+          { name: 'is_read', type: 'BOOLEAN', default: '0' },
+          { name: 'updated_at', type: 'DATETIME' },
+          { name: 'deleted_at', type: 'DATETIME' },
+          { name: 'is_deleted', type: 'BOOLEAN', default: '0' },
+          { name: 'quoted_message_id', type: 'INTEGER' },
+          { name: 'message_type', type: 'TEXT', default: "'normal'" },
+          { name: 'message_subtype', type: 'TEXT', default: "'text'" },
+          { name: 'forward_source_id', type: 'INTEGER' },
+          { name: 'file_url', type: 'TEXT' },
+          { name: 'file_name', type: 'TEXT' },
+          { name: 'file_size', type: 'INTEGER' },
+          { name: 'file_type', type: 'TEXT' }
         ]
       },
       {
@@ -145,6 +212,62 @@ function initializeDatabase() {
           'CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id)',
           'CREATE INDEX IF NOT EXISTS idx_sessions_socket_id ON sessions(socket_id)',
           'CREATE INDEX IF NOT EXISTS idx_sessions_created_at ON sessions(created_at)'
+        ]
+      },
+      {
+        name: 'topic_muted_users',
+        schema: `CREATE TABLE topic_muted_users (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          topic_id INTEGER NOT NULL,
+          user_id INTEGER NOT NULL,
+          muted_by INTEGER NOT NULL,
+          reason TEXT,
+          created_at DATETIME DEFAULT (datetime('now', 'localtime')), -- 使用本地时间(UTC+8)
+          FOREIGN KEY (topic_id) REFERENCES topics(id) ON DELETE CASCADE,
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+          FOREIGN KEY (muted_by) REFERENCES users(id) ON DELETE CASCADE
+        )`,
+        indexes: [
+          'CREATE INDEX IF NOT EXISTS idx_topic_muted_users_topic_id ON topic_muted_users(topic_id)',
+          'CREATE INDEX IF NOT EXISTS idx_topic_muted_users_user_id ON topic_muted_users(user_id)',
+          'CREATE UNIQUE INDEX IF NOT EXISTS idx_topic_muted_users_unique ON topic_muted_users(topic_id, user_id)'
+        ]
+      },
+      {
+        name: 'message_versions',
+        schema: `CREATE TABLE message_versions (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          message_id INTEGER NOT NULL,
+          content TEXT NOT NULL,
+          created_at DATETIME DEFAULT (datetime('now', 'localtime')), -- 使用本地时间(UTC+8)
+          message_type TEXT CHECK(message_type IN ('public', 'private')) NOT NULL,
+          FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE
+        )`,
+        indexes: [
+          'CREATE INDEX IF NOT EXISTS idx_message_versions_message_id ON message_versions(message_id)',
+          'CREATE INDEX IF NOT EXISTS idx_message_versions_message_type ON message_versions(message_type)',
+          'CREATE INDEX IF NOT EXISTS idx_message_versions_created_at ON message_versions(created_at)'
+        ]
+      },
+      {
+        name: 'forwarded_messages',
+        schema: `CREATE TABLE forwarded_messages (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          original_message_id INTEGER NOT NULL,
+          forwarded_message_id INTEGER NOT NULL,
+          forwarder_id INTEGER NOT NULL,
+          created_at DATETIME DEFAULT (datetime('now', 'localtime')), -- 使用本地时间(UTC+8)
+          message_type TEXT CHECK(message_type IN ('public', 'private')) NOT NULL,
+          FOREIGN KEY (original_message_id) REFERENCES messages(id) ON DELETE CASCADE,
+          FOREIGN KEY (forwarded_message_id) REFERENCES messages(id) ON DELETE CASCADE,
+          FOREIGN KEY (forwarder_id) REFERENCES users(id) ON DELETE CASCADE
+        )`,
+        indexes: [
+          'CREATE INDEX IF NOT EXISTS idx_forwarded_messages_original_message_id ON forwarded_messages(original_message_id)',
+          'CREATE INDEX IF NOT EXISTS idx_forwarded_messages_forwarded_message_id ON forwarded_messages(forwarded_message_id)',
+          'CREATE INDEX IF NOT EXISTS idx_forwarded_messages_forwarder_id ON forwarded_messages(forwarder_id)',
+          'CREATE INDEX IF NOT EXISTS idx_forwarded_messages_message_type ON forwarded_messages(message_type)',
+          'CREATE INDEX IF NOT EXISTS idx_forwarded_messages_created_at ON forwarded_messages(created_at)'
         ]
       }
     ];

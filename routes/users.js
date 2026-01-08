@@ -138,6 +138,49 @@ router.get('/users/stats', authenticateToken, async (req, res) => {
   }
 });
 
+// 添加用户名更新路由
+router.put('/users/username', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { newUsername } = req.body;
+    
+    // 验证用户名
+    const { validateUsername } = require('../utils/validators');
+    if (!validateUsername(newUsername)) {
+      return res.status(400).json({
+        success: false,
+        message: '用户名不能为空'
+      });
+    }
+    
+    // 不再检查新用户名是否已存在，允许重复用户名
+    
+    // 更新用户名
+    const result = await User.updateUsername(userId, newUsername.trim());
+    
+    if (result.changes === 0) {
+      return res.status(400).json({
+        success: false,
+        message: '用户名更新失败'
+      });
+    }
+    
+    res.json({
+      success: true,
+      message: '用户名更新成功',
+      data: {
+        newUsername: newUsername.trim()
+      }
+    });
+  } catch (error) {
+    console.error("更新用户名错误:", error);
+    res.status(500).json({ 
+      success: false, 
+      message: '服务器错误' 
+    });
+  }
+});
+
 // 辅助函数：计算加入时长
 function calculateJoinDuration(registrationDate) {
   const joinDate = new Date(registrationDate);

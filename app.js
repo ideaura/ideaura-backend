@@ -6,6 +6,7 @@ const https = require('https');
 
 const routes = require('./routes');
 const { initializeDatabase } = require('./initialization/database');
+// 移除对不存在的 initializeDefaultData 的引用
 const config = require('./config');
 const { initInternalMQTT } = require('./services/mqtt');
 
@@ -19,6 +20,71 @@ app.use(express.urlencoded({ extended: true }));
 
 // 提供静态文件服务
 app.use('/static', express.static(path.join(__dirname, 'public')));
+app.use('/static/uploads', express.static(path.join(__dirname, 'uploads')));
+
+// 处理上传文件的MD5文件名访问
+app.use('/uploads', (req, res, next) => {
+  const filePath = req.path;
+  const uploadsDir = path.join(__dirname, 'uploads');
+  
+  // 提取文件名和扩展名
+  const ext = path.extname(filePath);
+  const fileNameWithoutExt = path.basename(filePath, ext);
+  
+  // 检查是否有扩展名，如果有，检查对应的无扩展名文件是否存在
+  if (ext) {
+    const md5FilePath = path.join(uploadsDir, fileNameWithoutExt);
+    
+    fs.access(md5FilePath, fs.constants.F_OK, (err) => {
+      if (err) {
+        // 文件不存在，继续下一个中间件
+        next();
+      } else {
+        // 文件存在，设置正确的Content-Type并发送文件
+        const mimeTypes = {
+          '.html': 'text/html',
+          '.css': 'text/css',
+          '.js': 'application/javascript',
+          '.json': 'application/json',
+          '.png': 'image/png',
+          '.jpg': 'image/jpeg',
+          '.jpeg': 'image/jpeg',
+          '.gif': 'image/gif',
+          '.webp': 'image/webp',
+          '.bmp': 'image/bmp',
+          '.svg': 'image/svg+xml',
+          '.pdf': 'application/pdf',
+          '.txt': 'text/plain',
+          '.mp4': 'video/mp4',
+          '.avi': 'video/x-msvideo',
+          '.mov': 'video/quicktime',
+          '.wmv': 'video/x-ms-wmv',
+          '.flv': 'video/x-flv',
+          '.webm': 'video/webm',
+          '.zip': 'application/zip',
+          '.rar': 'application/x-rar-compressed',
+          '.tar': 'application/x-tar',
+          '.7z': 'application/x-7z-compressed',
+          '.doc': 'application/msword',
+          '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+          '.xls': 'application/vnd.ms-excel',
+          '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          '.ppt': 'application/vnd.ms-powerpoint',
+          '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
+        };
+        
+        const contentType = mimeTypes[ext.toLowerCase()] || 'application/octet-stream';
+        res.setHeader('Content-Type', contentType);
+        
+        // 发送文件
+        res.sendFile(md5FilePath);
+      }
+    });
+  } else {
+    // 没有扩展名，直接使用静态文件服务
+    next();
+  }
+});
 
 // API路由
 app.use('/api', routes);

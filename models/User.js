@@ -57,10 +57,41 @@ class User {
     });
   }
 
+  // 更新用户名
+  static updateUsername(userId, newUsername) {
+    return new Promise((resolve, reject) => {
+      // 使用本地时间
+      const currentTime = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false });
+      
+      db.run(
+        "UPDATE users SET username = ?, updated_at = ? WHERE id = ?",
+        [newUsername, currentTime, userId],
+        function(err) {
+          if (err) return reject(err);
+          resolve({ changes: this.changes });
+        }
+      );
+    });
+  }
+
+  // 检查用户名是否已存在
+  static checkUsernameExists(username) {
+    return new Promise((resolve, reject) => {
+      db.get(
+        "SELECT 1 FROM users WHERE username = ?",
+        [username],
+        (err, row) => {
+          if (err) return reject(err);
+          resolve(!!row);
+        }
+      );
+    });
+  }
+
   static findByEmail(email) {
     return new Promise((resolve, reject) => {
       db.get(
-        "SELECT id, username, email, email_verified, created_at, registration_order FROM users WHERE email = ?",
+        "SELECT id, username, email, password, email_verified, created_at, registration_order FROM users WHERE email = ?",
         [email],
         (err, row) => {
           if (err) return reject(err);

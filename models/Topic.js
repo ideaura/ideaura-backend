@@ -12,8 +12,8 @@ class Topic {
       const currentTime = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false });
       
       db.run(
-        "INSERT INTO topics (name, description, created_by, is_private, is_active, message_count, last_activity, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        [name, description, created_by, is_private, 1, 0, currentTime, currentTime],
+        "INSERT INTO topics (name, description, announcement, created_by, is_private, is_active, message_count, last_activity, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [name, description, null, created_by, is_private, 1, 0, currentTime, currentTime],
         function(err) {
           if (err) return reject(err);
           
@@ -39,7 +39,7 @@ class Topic {
   static findByUser(userId, limit = 50) {
     return new Promise((resolve, reject) => {
       db.all(
-        `SELECT t.*, u.username as creatorName
+        `SELECT t.*, u.id as creatorId, u.username as creatorName
          FROM topics t
          LEFT JOIN users u ON t.created_by = u.id
          INNER JOIN topic_members tm ON t.id = tm.topic_id
@@ -59,7 +59,7 @@ class Topic {
   static findByUserWithLatestMessage(userId, limit = 50) {
     return new Promise((resolve, reject) => {
       db.all(
-        `SELECT t.*, u.username as creatorName
+        `SELECT t.*, u.id as creatorId, u.username as creatorName
          FROM topics t
          LEFT JOIN users u ON t.created_by = u.id
          INNER JOIN topic_members tm ON t.id = tm.topic_id
@@ -92,7 +92,7 @@ class Topic {
   static getPopularTopics(limit = 10) {
     return new Promise((resolve, reject) => {
       db.all(
-        `SELECT t.*, u.username as creatorName, COUNT(m.id) as message_count
+        `SELECT t.*, u.id as creatorId, u.username as creatorName, COUNT(m.id) as message_count
          FROM topics t
          LEFT JOIN users u ON t.created_by = u.id
          LEFT JOIN messages m ON t.id = m.topic_id
@@ -113,7 +113,7 @@ class Topic {
   static getPopularTopicsWithLatestMessage(limit = 10) {
     return new Promise((resolve, reject) => {
       db.all(
-        `SELECT t.*, u.username as creatorName, COUNT(m.id) as message_count
+        `SELECT t.*, u.id as creatorId, u.username as creatorName, COUNT(m.id) as message_count
          FROM topics t
          LEFT JOIN users u ON t.created_by = u.id
          LEFT JOIN messages m ON t.id = m.topic_id
@@ -147,7 +147,7 @@ class Topic {
   static getRecentActiveTopics(limit = 10) {
     return new Promise((resolve, reject) => {
       db.all(
-        `SELECT t.*, u.username as creatorName
+        `SELECT t.*, u.id as creatorId, u.username as creatorName
          FROM topics t
          LEFT JOIN users u ON t.created_by = u.id
          WHERE t.is_active = 1 
@@ -167,7 +167,7 @@ class Topic {
   static getRecentActiveTopicsWithLatestMessage(limit = 10) {
     return new Promise((resolve, reject) => {
       db.all(
-        `SELECT t.*, u.username as creatorName
+        `SELECT t.*, u.id as creatorId, u.username as creatorName
          FROM topics t
          LEFT JOIN users u ON t.created_by = u.id
          WHERE t.is_active = 1 
@@ -200,7 +200,7 @@ class Topic {
   static getNewTopics(limit = 10) {
     return new Promise((resolve, reject) => {
       db.all(
-        `SELECT t.*, u.username as creatorName
+        `SELECT t.*, u.id as creatorId, u.username as creatorName
          FROM topics t
          LEFT JOIN users u ON t.created_by = u.id
          WHERE t.is_active = 1
@@ -219,7 +219,7 @@ class Topic {
   static getNewTopicsWithLatestMessage(limit = 10) {
     return new Promise((resolve, reject) => {
       db.all(
-        `SELECT t.*, u.username as creatorName
+        `SELECT t.*, u.id as creatorId, u.username as creatorName
          FROM topics t
          LEFT JOIN users u ON t.created_by = u.id
          WHERE t.is_active = 1
@@ -251,7 +251,7 @@ class Topic {
   static findAll(userId, limit = 50) {
     return new Promise((resolve, reject) => {
       db.all(
-        `SELECT t.*, u.username as creatorName
+        `SELECT t.*, u.id as creatorId, u.username as creatorName
          FROM topics t
          LEFT JOIN users u ON t.created_by = u.id
          INNER JOIN topic_members tm ON t.id = tm.topic_id
@@ -271,7 +271,7 @@ class Topic {
   static findAllWithLatestMessage(userId, limit = 50) {
     return new Promise((resolve, reject) => {
       db.all(
-        `SELECT t.*, u.username as creatorName
+        `SELECT t.*, u.id as creatorId, u.username as creatorName
          FROM topics t
          LEFT JOIN users u ON t.created_by = u.id
          INNER JOIN topic_members tm ON t.id = tm.topic_id
@@ -307,7 +307,7 @@ class Topic {
       let sql, params;
       if (!isNaN(query)) {
         // 按ID搜索（仅非私有话题或用户已加入的私有话题）
-        sql = `SELECT t.*, u.username as creatorName
+        sql = `SELECT t.*, u.id as creatorId, u.username as creatorName
                FROM topics t
                LEFT JOIN users u ON t.created_by = u.id
                LEFT JOIN topic_members tm ON t.id = tm.topic_id AND tm.user_id = ?
@@ -316,7 +316,7 @@ class Topic {
         params = [userId, parseInt(query), limit];
       } else {
         // 按名称搜索（仅非私有话题或用户已加入的私有话题）
-        sql = `SELECT t.*, u.username as creatorName
+        sql = `SELECT t.*, u.id as creatorId, u.username as creatorName
                FROM topics t
                LEFT JOIN users u ON t.created_by = u.id
                LEFT JOIN topic_members tm ON t.id = tm.topic_id AND tm.user_id = ?
@@ -350,7 +350,7 @@ class Topic {
       let sql, params;
       if (!isNaN(query)) {
         // 按ID搜索（仅非私有话题或用户已加入的私有话题）
-        sql = `SELECT t.*, u.username as creatorName
+        sql = `SELECT t.*, u.id as creatorId, u.username as creatorName
                FROM topics t
                LEFT JOIN users u ON t.created_by = u.id
                LEFT JOIN topic_members tm ON t.id = tm.topic_id AND tm.user_id = ?
@@ -359,7 +359,7 @@ class Topic {
         params = [userId, parseInt(query), limit];
       } else {
         // 按名称搜索（仅非私有话题或用户已加入的私有话题）
-        sql = `SELECT t.*, u.username as creatorName
+        sql = `SELECT t.*, u.id as creatorId, u.username as creatorName
                FROM topics t
                LEFT JOIN users u ON t.created_by = u.id
                LEFT JOIN topic_members tm ON t.id = tm.topic_id AND tm.user_id = ?
@@ -405,7 +405,7 @@ class Topic {
   static findById(id) {
     return new Promise((resolve, reject) => {
       db.get(
-        `SELECT t.*, u.username as creatorName
+        `SELECT t.*, u.id as creatorId, u.username as creatorName
          FROM topics t
          LEFT JOIN users u ON t.created_by = u.id
          WHERE t.id = ? AND t.is_active = 1`,
@@ -413,6 +413,20 @@ class Topic {
         (err, row) => {
           if (err) return reject(err);
           resolve(row);
+        }
+      );
+    });
+  }
+
+  // 获取话题公告
+  static getAnnouncement(topicId) {
+    return new Promise((resolve, reject) => {
+      db.get(
+        `SELECT announcement FROM topics WHERE id = ? AND is_active = 1`,
+        [topicId],
+        (err, row) => {
+          if (err) return reject(err);
+          resolve(row ? row.announcement : null);
         }
       );
     });
@@ -474,13 +488,29 @@ class Topic {
     });
   }
 
-  // 获取话题成员列表（包含角色信息）
+  // 检查用户是否是话题管理员
+  static isAdmin(topicId, userId) {
+    return new Promise((resolve, reject) => {
+      db.get(
+        `SELECT 1 FROM topic_members WHERE topic_id = ? AND user_id = ? AND role = 'admin'`,
+        [topicId, userId],
+        (err, row) => {
+          if (err) return reject(err);
+          resolve(!!row);
+        }
+      );
+    });
+  }
+
+  // 获取话题成员列表（包含角色信息和禁言状态）
   static getMembers(topicId, limit = 50) {
     return new Promise((resolve, reject) => {
       db.all(
-        `SELECT u.id, u.username, u.registration_order, tm.joined_at, tm.role
+        `SELECT u.id, u.username, u.registration_order, tm.joined_at, tm.role, 
+               CASE WHEN tmu.user_id IS NOT NULL THEN 1 ELSE 0 END AS is_muted
          FROM topic_members tm
          JOIN users u ON tm.user_id = u.id
+         LEFT JOIN topic_muted_users tmu ON tm.topic_id = tmu.topic_id AND tm.user_id = tmu.user_id
          WHERE tm.topic_id = ?
          ORDER BY 
            CASE tm.role
@@ -496,7 +526,8 @@ class Topic {
           // 格式化时间
           const formattedRows = rows.map(row => ({
             ...row,
-            joined_at: formatLocalTime(row.joined_at)
+            joined_at: formatLocalTime(row.joined_at),
+            isMuted: !!row.is_muted
           }));
           resolve(formattedRows);
         }
@@ -645,7 +676,7 @@ class Topic {
   // 修改话题信息
   static updateTopic(topicId, userId, updates) {
     return new Promise((resolve, reject) => {
-      const { name, description } = updates;
+      const { name, description, announcement } = updates;
       
       // 只有创建者和管理员可以修改话题信息
       db.get(
@@ -670,6 +701,11 @@ class Topic {
           if (description !== undefined) {
             updatesArr.push("description = ?");
             params.push(description);
+          }
+          
+          if (announcement !== undefined) {
+            updatesArr.push("announcement = ?");
+            params.push(announcement);
           }
           
           if (updatesArr.length === 0) {
@@ -716,6 +752,33 @@ class Topic {
     });
   }
 
+  // 设置话题公告（仅创建者和管理员可以设置）
+  static setAnnouncement(topicId, userId, announcement) {
+    return new Promise((resolve, reject) => {
+      // 只有创建者和管理员可以设置公告
+      db.get(
+        "SELECT 1 FROM topic_members WHERE topic_id = ? AND user_id = ? AND (role = 'creator' OR role = 'admin')",
+        [topicId, userId],
+        (err, row) => {
+          if (err) return reject(err);
+          
+          if (!row) {
+            return reject(new Error('只有话题创建者和管理员可以设置公告'));
+          }
+          
+          db.run(
+            "UPDATE topics SET announcement = ? WHERE id = ?",
+            [announcement, topicId],
+            function(err) {
+              if (err) return reject(err);
+              resolve({ changes: this.changes });
+            }
+          );
+        }
+      );
+    });
+  }
+
   // 归档话题（设为非活跃）
   static archive(id) {
     return new Promise((resolve, reject) => {
@@ -725,6 +788,215 @@ class Topic {
         function(err) {
           if (err) return reject(err);
           resolve({ changes: this.changes });
+        }
+      );
+    });
+  }
+
+  // 移除话题成员
+  static removeMember(topicId, removerId, memberId) {
+    return new Promise((resolve, reject) => {
+      // 检查操作者是否是话题创建者或管理员
+      db.get(
+        "SELECT role FROM topic_members WHERE topic_id = ? AND user_id = ?",
+        [topicId, removerId],
+        (err, removerRow) => {
+          if (err) return reject(err);
+          
+          if (!removerRow) {
+            return reject(new Error('您不是该话题的成员'));
+          }
+          
+          // 只有创建者和管理员可以移除成员
+          if (removerRow.role !== 'creator' && removerRow.role !== 'admin') {
+            return reject(new Error('只有话题创建者和管理员可以移除成员'));
+          }
+          
+          // 检查被移除者的信息
+          db.get(
+            "SELECT role FROM topic_members WHERE topic_id = ? AND user_id = ?",
+            [topicId, memberId],
+            (err, memberRow) => {
+              if (err) return reject(err);
+              
+              if (!memberRow) {
+                return reject(new Error('该用户不是话题成员'));
+              }
+              
+              // 管理员不能移除创建者或其它管理员
+              if (removerRow.role === 'admin' && (memberRow.role === 'creator' || memberRow.role === 'admin')) {
+                return reject(new Error('管理员不能移除创建者或其他管理员'));
+              }
+              
+              // 不能移除自己
+              if (removerId === memberId) {
+                return reject(new Error('不能移除自己'));
+              }
+              
+              // 执行移除操作
+              db.run(
+                "DELETE FROM topic_members WHERE topic_id = ? AND user_id = ?",
+                [topicId, memberId],
+                function(err) {
+                  if (err) return reject(err);
+                  resolve({ changes: this.changes });
+                }
+              );
+            }
+          );
+        }
+      );
+    });
+  }
+
+  // 禁言用户
+  static muteUser(topicId, muterId, userId, reason = null) {
+    return new Promise((resolve, reject) => {
+      // 检查操作者是否是话题创建者或管理员
+      db.get(
+        "SELECT role FROM topic_members WHERE topic_id = ? AND user_id = ?",
+        [topicId, muterId],
+        (err, muterRow) => {
+          if (err) return reject(err);
+          
+          if (!muterRow) {
+            return reject(new Error('您不是该话题的成员'));
+          }
+          
+          // 只有创建者和管理员可以禁言用户
+          if (muterRow.role !== 'creator' && muterRow.role !== 'admin') {
+            return reject(new Error('只有话题创建者和管理员可以禁言用户'));
+          }
+          
+          // 检查被禁言者的信息
+          db.get(
+            "SELECT role FROM topic_members WHERE topic_id = ? AND user_id = ?",
+            [topicId, userId],
+            (err, userRow) => {
+              if (err) return reject(err);
+              
+              if (!userRow) {
+                return reject(new Error('该用户不是话题成员'));
+              }
+              
+              // 管理员不能禁言创建者或其它管理员
+              if (muterRow.role === 'admin' && (userRow.role === 'creator' || userRow.role === 'admin')) {
+                return reject(new Error('管理员不能禁言创建者或其他管理员'));
+              }
+              
+              // 不能禁言自己
+              if (muterId === userId) {
+                return reject(new Error('不能禁言自己'));
+              }
+              
+              // 执行禁言操作
+              const currentTime = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false });
+              db.run(
+                "INSERT OR REPLACE INTO topic_muted_users (topic_id, user_id, muted_by, reason, created_at) VALUES (?, ?, ?, ?, ?)",
+                [topicId, userId, muterId, reason, currentTime],
+                function(err) {
+                  if (err) return reject(err);
+                  resolve({ changes: this.changes });
+                }
+              );
+            }
+          );
+        }
+      );
+    });
+  }
+
+  // 解除禁言
+  static unmuteUser(topicId, unmuterId, userId) {
+    return new Promise((resolve, reject) => {
+      // 检查操作者是否是话题创建者或管理员
+      db.get(
+        "SELECT role FROM topic_members WHERE topic_id = ? AND user_id = ?",
+        [topicId, unmuterId],
+        (err, unmuterRow) => {
+          if (err) return reject(err);
+          
+          if (!unmuterRow) {
+            return reject(new Error('您不是该话题的成员'));
+          }
+          
+          // 只有创建者和管理员可以解除禁言
+          if (unmuterRow.role !== 'creator' && unmuterRow.role !== 'admin') {
+            return reject(new Error('只有话题创建者和管理员可以解除禁言'));
+          }
+          
+          // 管理员只能解除普通成员的禁言，不能解除创建者或其它管理员的禁言
+          if (unmuterRow.role === 'admin') {
+            db.get(
+              "SELECT role FROM topic_members WHERE topic_id = ? AND user_id = ?",
+              [topicId, userId],
+              (err, userRow) => {
+                if (err) return reject(err);
+                
+                if (!userRow) {
+                  return reject(new Error('该用户不是话题成员'));
+                }
+                
+                if (userRow.role === 'creator' || userRow.role === 'admin') {
+                  return reject(new Error('管理员只能解除普通成员的禁言'));
+                }
+                
+                // 执行解除禁言操作
+                db.run(
+                  "DELETE FROM topic_muted_users WHERE topic_id = ? AND user_id = ?",
+                  [topicId, userId],
+                  function(err) {
+                    if (err) return reject(err);
+                    resolve({ changes: this.changes });
+                  }
+                );
+              }
+            );
+          } else {
+            // 创建者可以解除任何人的禁言
+            db.run(
+              "DELETE FROM topic_muted_users WHERE topic_id = ? AND user_id = ?",
+              [topicId, userId],
+              function(err) {
+                if (err) return reject(err);
+                resolve({ changes: this.changes });
+              }
+            );
+          }
+        }
+      );
+    });
+  }
+
+  // 检查用户是否被禁言
+  static isUserMuted(topicId, userId) {
+    return new Promise((resolve, reject) => {
+      db.get(
+        "SELECT 1 FROM topic_muted_users WHERE topic_id = ? AND user_id = ?",
+        [topicId, userId],
+        (err, row) => {
+          if (err) return reject(err);
+          resolve(!!row);
+        }
+      );
+    });
+  }
+
+  // 获取用户的禁言信息
+  static getUserMuteInfo(topicId, userId) {
+    return new Promise((resolve, reject) => {
+      db.get(
+        `SELECT tm.*, u.username as mutedByUsername
+         FROM topic_muted_users tm
+         JOIN users u ON tm.muted_by = u.id
+         WHERE tm.topic_id = ? AND tm.user_id = ?`,
+        [topicId, userId],
+        (err, row) => {
+          if (err) return reject(err);
+          if (row) {
+            row.created_at = formatLocalTime(row.created_at);
+          }
+          resolve(row);
         }
       );
     });

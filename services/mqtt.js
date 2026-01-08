@@ -229,6 +229,60 @@ function broadcastMessage(messageData) {
   }
 }
 
+// 广播消息操作事件（撤回、编辑、转发等）
+function broadcastMessageEvent(eventData) {
+  // eventData 应包含 eventType, messageId, userId, 和其他相关信息
+  console.log(`广播消息事件: ${eventData.eventType}, messageId=${eventData.messageId}`);
+  
+  // 为事件添加时间戳
+  eventData.timestamp = new Date().toISOString();
+  
+  // 根据事件类型确定接收者
+  if (eventData.messageType === 'private') {
+    // 私聊消息事件发送给相关用户
+    const recipients = [eventData.userId, eventData.targetUserId];
+    broadcastToRecipients(recipients, {
+      type: 'message_event',
+      ...eventData
+    });
+  } else if (eventData.topicId) {
+    // 话题消息事件发送给话题成员
+    const db = require('../config/database');
+    db.all(
+      "SELECT user_id FROM topic_members WHERE topic_id = ?",
+      [eventData.topicId],
+      (err, rows) => {
+        let recipients = [];
+        if (!err) {
+          recipients = rows.map(row => row.user_id);
+          // 确保操作发起者也能收到事件
+          if (!recipients.includes(eventData.userId)) {
+            recipients.push(eventData.userId);
+          }
+        }
+        
+        broadcastToRecipients(recipients, {
+          type: 'message_event',
+          ...eventData
+        });
+      }
+    );
+  } else {
+    // 公共消息事件发送给所有在线用户
+    let recipients = [];
+    clients.forEach((client) => {
+      if (client.userId) {
+        recipients.push(client.userId);
+      }
+    });
+    
+    broadcastToRecipients(recipients, {
+      type: 'message_event',
+      ...eventData
+    });
+  }
+}
+
 // 辅助函数：向接收者广播消息
 function broadcastToRecipients(recipients, messageData) {
   console.log(`消息接收者: ${recipients.join(', ')}`);
@@ -242,8 +296,14 @@ function broadcastToRecipients(recipients, messageData) {
       continue;
     }
     
+    // 添加消息来源标识：是发送给自己还是他人
+    const enrichedMessageData = {
+      ...messageData,
+      isSelf: messageData.user_id === userIdNum || messageData.sender_id === userIdNum
+    };
+    
     const inboxTopic = generateUserInboxTopic(userIdNum);
-    const payload = JSON.stringify(messageData);
+    const payload = JSON.stringify(enrichedMessageData);
     
     // 广播到WebSocket订阅者
     broadcastToWebSocketSubscribers(inboxTopic, payload);
@@ -260,5 +320,6 @@ module.exports = {
   initMQTT, 
   initInternalMQTT,
   broadcastMessage,
+  broadcastMessageEvent,
   generateUserInboxTopic: generateUserInboxTopicExport // 导出用户收件箱主题生成函数
 };

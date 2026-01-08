@@ -133,6 +133,9 @@ dist
 # 聊天室数据文件
 .env*
 data/
+uploads/
 ssl/
 
-
+# 开发用文件
+migrations/
+api.md

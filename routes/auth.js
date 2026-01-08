@@ -30,7 +30,7 @@ router.post('/auth/register', async (req, res) => {
     if (!validateUsername(username)) {
       return res.status(400).json({ 
         success: false, 
-        message: '用户名格式不正确(3-20位字母、数字或下划线)' 
+        message: '用户名不能为空' 
       });
     }
     
@@ -49,13 +49,7 @@ router.post('/auth/register', async (req, res) => {
       });
     }
     
-    const existingUser = await User.findByUsername(username);
-    if (existingUser) {
-      return res.status(400).json({ 
-        success: false, 
-        message: '用户名已存在' 
-      });
-    }
+    // 不再检查用户名是否已存在，允许重复用户名
     
     const newUser = await User.create({ username, email, password });
     
@@ -349,21 +343,21 @@ router.post('/auth/reset-password', async (req, res) => {
 
 // 用户登录
 router.post('/auth/login', async (req, res) => {
-  const { username, password } = req.body;
+  const { email, password } = req.body;
   
-  if (!username || !password) {
+  if (!email || !password) {
     return res.status(400).json({ 
       success: false, 
-      message: '用户名和密码为必填项' 
+      message: '邮箱和密码为必填项' 
     });
   }
   
   try {
-    const user = await User.findByUsername(username);
+    const user = await User.findByEmail(email);
     if (!user) {
       return res.status(400).json({ 
         success: false, 
-        message: '用户名或密码错误' 
+        message: '邮箱或密码错误' 
       });
     }
     
@@ -378,7 +372,7 @@ router.post('/auth/login', async (req, res) => {
     if (!passwordMatch) {
       return res.status(400).json({ 
         success: false, 
-        message: '用户名或密码错误' 
+        message: '邮箱或密码错误' 
       });
     }
     

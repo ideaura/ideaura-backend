@@ -4,8 +4,8 @@ function validateEmail(email) {
 }
 
 function validateUsername(username) {
-  const usernameRegex = /^[a-zA-Z0-9_]{3,20}$/;
-  return usernameRegex.test(username);
+  // 用户名可以是任何字符，只需非空即可
+  return username && username.trim().length > 0;
 }
 
 function validatePassword(password) {
