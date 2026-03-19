@@ -211,13 +211,12 @@ function initInternalMQTT(server) {
                   // 常规用户验证：用户只能订阅自己的收件箱
                   const userInboxTopic = generateUserInboxTopic(ws.userId);
 
-                  console.log('Comparing ', topic, ' vs ', userInboxTopic); 
- packet.topics.forEach(topic => {
+                  packet.topics.forEach(topic => {
                     if (topic === userInboxTopic) {
                       ws.subscribedTopics.push(topic);
                       granted.push(1);
                     } else {
-                      console.log("Topic mismatch! Expected:", userInboxTopic, "Got:", topic); granted.push(0);
+                      granted.push(0);
                     }
                   });
                 } else if (ws.oidcSessionId) {
@@ -229,7 +228,7 @@ function initInternalMQTT(server) {
                       ws.subscribedTopics.push(topic);
                       granted.push(1);
                     } else {
-                      console.log("Topic mismatch! Expected:", userInboxTopic, "Got:", topic); granted.push(0);
+                      granted.push(0);
                     }
                   });
                 }
@@ -419,42 +418,61 @@ function handleBroadcastMessage(message) {
 
 function broadcastMessage(messageData) {
   let adjustedMessageData = { ...messageData };
+  
+  if (adjustedMessageData.is_deleted !== undefined) {
+    adjustedMessageData.is_deleted = adjustedMessageData.is_deleted === true ? 1 : 0;
+  }
+  
+  if (adjustedMessageData.messageType && !adjustedMessageData.message_type) {
+    adjustedMessageData.message_type = adjustedMessageData.messageType;
+  }
+  
+  if (adjustedMessageData.messageSubtype && !adjustedMessageData.message_subtype) {
+    adjustedMessageData.message_subtype = adjustedMessageData.messageSubtype;
+  }
+  
+  if (adjustedMessageData.sourceType && !adjustedMessageData.source_type) {
+    adjustedMessageData.source_type = adjustedMessageData.sourceType;
+  }
 
-  if (messageData.messageType === 'private') {
+  if (adjustedMessageData.messageType === 'private') {
     adjustedMessageData.messageType = 'normal';
     adjustedMessageData.sourceType = 'private';
+    adjustedMessageData.source_type = 'private';
 
-    const recipients = [messageData.sender_id, messageData.receiver_id];
-    console.log(`私聊消息: sender_id=${messageData.sender_id}, receiver_id=${messageData.receiver_id}`);
+    const recipients = [adjustedMessageData.sender_id, adjustedMessageData.receiver_id];
+    console.log(`私聊消息: sender_id=${adjustedMessageData.sender_id}, receiver_id=${adjustedMessageData.receiver_id}`);
 
     setImmediate(() => {
       broadcastToRecipients(recipients, adjustedMessageData);
     });
-  } else if (messageData.topic_id) {
+  } else if (adjustedMessageData.topic_id) {
     adjustedMessageData.messageType = 'normal';
     adjustedMessageData.sourceType = 'topic';
+    adjustedMessageData.source_type = 'topic';
 
-    console.log(`话题消息: topic_id=${messageData.topic_id}, user_id=${messageData.user_id}`);
+    console.log(`话题消息: topic_id=${adjustedMessageData.topic_id}, user_id=${adjustedMessageData.user_id}`);
 
     setImmediate(async () => {
       try {
-        const recipients = await getTopicMembers(messageData.topic_id);
+        const recipients = await getTopicMembers(adjustedMessageData.topic_id);
 
-        if (!recipients.includes(messageData.user_id)) {
-          recipients.push(messageData.user_id);
+        if (!recipients.includes(adjustedMessageData.user_id)) {
+          recipients.push(adjustedMessageData.user_id);
         }
 
         broadcastToRecipients(recipients, adjustedMessageData);
       } catch (err) {
         console.error("获取话题成员失败:", err);
-        broadcastToRecipients([messageData.user_id], adjustedMessageData);
+        broadcastToRecipients([adjustedMessageData.user_id], adjustedMessageData);
       }
     });
   } else {
     adjustedMessageData.messageType = 'normal';
     adjustedMessageData.sourceType = 'chatroom';
+    adjustedMessageData.source_type = 'chatroom';
 
-    console.log(`公共消息: user_id=${messageData.user_id}`);
+    console.log(`公共消息: user_id=${adjustedMessageData.user_id}`);
 
     setImmediate(() => {
       let recipients = [];
@@ -465,8 +483,8 @@ function broadcastMessage(messageData) {
       });
 
       recipients = [...new Set(recipients)];
-      if (!recipients.includes(messageData.user_id)) {
-        recipients.push(messageData.user_id);
+      if (!recipients.includes(adjustedMessageData.user_id)) {
+        recipients.push(adjustedMessageData.user_id);
       }
 
       broadcastToRecipients(recipients, adjustedMessageData);

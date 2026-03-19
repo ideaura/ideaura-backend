@@ -31,19 +31,22 @@ exports.getQuotedMessageInfoBatch = function (messageIds, isPrivate = false) {
                 const resultMap = {};
                 for (const row of rows) {
                     const messageData = {
-                        ...row,
+                        id: row.id,
+                        content: row.content,
                         created_at: formatLocalTime(row.created_at),
                         messageTime: formatMessageTime(row.created_at),
                         relativeTime: getRelativeTime(row.created_at),
-                        messageType: row.message_type || 'normal',
+                        message_type: row.message_type || 'normal',
+                        is_deleted: row.is_deleted === true ? 1 : 0,
                         isEdited: !!row.updated_at,
                         isRecalled: row.is_deleted === true,
-                        isQuoted: !!row.quoted_message_id
+                        senderId: row.senderId || row.senderid,
+                        senderName: row.senderName || row.sendername,
+                        senderAvatar: row.senderAvatar || row.senderavatar
                     };
 
                     if (messageData.isRecalled) {
                         messageData.content = '[消息已被撤回]';
-                        delete messageData.quotedMessage;
                     }
                     resultMap[row.id] = messageData;
                 }

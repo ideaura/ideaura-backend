@@ -1,8 +1,9 @@
+// middleware/fileUpload.js
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const md5 = require('md5');
-const crypto = require('crypto');
+const time = require('../utils/time');
 
 // 确保uploads目录存在
 const uploadDir = path.join(__dirname, '../uploads');

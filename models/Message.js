@@ -111,110 +111,129 @@ class Message {
   }
 
   static findById(id) {
-    return new Promise((resolve, reject) => {
-      db.get(
-        `SELECT m.*, u.id as "senderId", u.username as "senderName", u.avatar_url as "senderAvatar", t.name as "topicName"
-         FROM messages m
-         JOIN users u ON m.user_id = u.id
-         LEFT JOIN topics t ON m.topic_id = t.id
-         WHERE m.id = ?`,
-        [id],
-        (err, row) => {
-          if (err) return reject(err);
-          if (row) {
-            let messageData;
+  return new Promise((resolve, reject) => {
+    db.get(
+      `SELECT m.*, u.id as "senderId", u.username as "senderName", u.avatar_url as "senderAvatar", t.name as "topicName"
+       FROM messages m
+       JOIN users u ON m.user_id = u.id
+       LEFT JOIN topics t ON m.topic_id = t.id
+       WHERE m.id = ?`,
+      [id],
+      (err, row) => {
+        if (err) return reject(err);
+        if (row) {
+          let messageData;
 
-            // 根据消息类型创建不同的数据结构
-            if (row.is_deleted === true) {
-              // 撤回消息 - 不包含内容字段
-              messageData = {
-                id: row.id,
-                isRecalled: true,
-                recallTime: formatLocalTime(row.deleted_at || row.created_at),
-                created_at: formatLocalTime(row.created_at),
-                messageTime: formatMessageTime(row.created_at),
-                relativeTime: getRelativeTime(row.created_at),
-                messageType: 'recalled',
-                senderId: row.senderI || row.senderid || row.user_id,
-                senderName: row.senderName || row.sendername,
-                senderAvatar: row.senderAvatar || row.senderavatar,
-                topicName: row.topicName || row.topicname,
-                isTopicMessage: !!row.topic_id
+          // 根据消息类型创建不同的数据结构
+          if (row.is_deleted === true) {
+            // 撤回消息 - 不包含内容字段
+            messageData = {
+              id: row.id,
+              isRecalled: true,
+              recallTime: formatLocalTime(row.deleted_at || row.created_at),
+              created_at: formatLocalTime(row.created_at),
+              messageTime: formatMessageTime(row.created_at),
+              relativeTime: getRelativeTime(row.created_at),
+              messageType: 'recalled',
+              senderId: row.senderId || row.senderid || row.user_id,
+              senderName: row.senderName || row.sendername,
+              senderAvatar: row.senderAvatar || row.senderavatar,
+              topicName: row.topicName || row.topicname,
+              isTopicMessage: !!row.topic_id
+            };
+
+            resolve(messageData);
+          } else {
+            // 非撤回消息 - 包含完整内容
+            messageData = {
+              id: row.id,
+              topic_id: row.topic_id,
+              user_id: row.user_id,
+              content: row.content,
+              created_at: formatLocalTime(row.created_at),
+              updated_at: row.updated_at ? formatLocalTime(row.updated_at) : null,
+              message_type: row.message_type || 'normal',
+              forward_source_id: row.forward_source_id,
+              is_deleted: row.is_deleted === true ? 1 : 0,  // 改为 0/1 而非 boolean
+              quoted_message_id: row.quoted_message_id,
+              deleted_at: row.deleted_at,
+              message_subtype: row.message_subtype || 'text',
+              file_type: row.file_type,
+              file_url: row.file_url,
+              file_name: row.file_name,
+              file_size: row.file_size,
+              source_type: row.source_type || 'chatroom',
+              senderId: row.senderId || row.senderid || row.user_id,
+              senderName: row.senderName || row.sendername,
+              senderAvatar: row.senderAvatar || row.senderavatar,
+              topicName: row.topicName || row.topicname,
+              messageTime: formatMessageTime(row.created_at),
+              relativeTime: getRelativeTime(row.created_at),
+              messageType: row.message_type || 'normal',
+              messageSubtype: row.message_subtype || 'text',
+              sourceType: row.source_type || 'chatroom',
+              isTopicMessage: !!row.topic_id
+            };
+
+            // 如果是文件、图片或视频消息，添加文件信息
+            if (['file', 'image', 'video'].includes(row.message_subtype)) {
+              messageData.fileInfo = {
+                url: row.file_url,
+                name: row.file_name,
+                size: row.file_size,
+                type: row.file_type
               };
+            }
 
-              resolve(messageData);
-            } else {
-              // 非撤回消息 - 包含完整内容
-              messageData = {
-                ...row,
-                created_at: formatLocalTime(row.created_at),
-                messageTime: formatMessageTime(row.created_at),
-                relativeTime: getRelativeTime(row.created_at),
-                messageType: row.message_type || 'normal',
-                messageSubtype: row.message_subtype || 'text', // 基本消息类型
-                sourceType: row.source_type || 'chatroom',
-                isTopicMessage: !!row.topic_id
-              };
-
-              // 如果是文件、图片或视频消息，添加文件信息
-              if (['file', 'image', 'video'].includes(row.message_subtype)) {
-                messageData.fileInfo = {
-                  url: row.file_url,
-                  name: row.file_name,
-                  size: row.file_size,
-                  type: row.file_type
-                };
-              }
-
-              // 根据具体消息类型添加额外字段
-              if (row.message_type === 'forwarded') {
-                messageData.originalMessageId = row.forward_source_id;
-                // 获取原始消息信息
-                if (messageData.originalMessageId) {
-                  Message.getOriginalForwardedMessageInfo(messageData.originalMessageId).then(originalMsg => {
-                    messageData.originalMessage = originalMsg;
-                    resolve(messageData);
-                  }).catch(() => {
-                    resolve(messageData);
-                  });
-                } else {
+            // 根据具体消息类型添加额外字段
+            if (row.message_type === 'forwarded') {
+              messageData.originalMessageId = row.forward_source_id;
+              // 获取原始消息信息
+              if (messageData.originalMessageId) {
+                Message.getOriginalForwardedMessageInfo(messageData.originalMessageId).then(originalMsg => {
+                  messageData.originalMessage = originalMsg;
                   resolve(messageData);
-                }
-              } else if (row.quoted_message_id) {
-                messageData.quotedMessageId = row.quoted_message_id;
-                // 获取引用消息信息
-                if (messageData.quotedMessageId) {
-                  Message.getQuotedMessageInfo(messageData.quotedMessageId).then(quotedMessage => {
-                    messageData.quotedMessage = quotedMessage;
-                    resolve(messageData);
-                  }).catch(() => {
-                    resolve(messageData);
-                  });
-                } else {
+                }).catch(() => {
                   resolve(messageData);
-                }
-              } else if (row.updated_at) {
-                messageData.updated_at = formatLocalTime(row.updated_at);
-                // 获取编辑历史
-                Message.getMessageVersions(row.id, false)
-                  .then(versions => {
-                    messageData.editHistory = versions;
-                    resolve(messageData);
-                  }).catch(() => {
-                    messageData.editHistory = [];
-                    resolve(messageData);
-                  });
+                });
               } else {
                 resolve(messageData);
               }
+            } else if (row.quoted_message_id) {
+              messageData.quotedMessageId = row.quoted_message_id;
+              // 获取引用消息信息
+              if (messageData.quotedMessageId) {
+                Message.getQuotedMessageInfo(messageData.quotedMessageId).then(quotedMessage => {
+                  messageData.quotedMessage = quotedMessage;
+                  resolve(messageData);
+                }).catch(() => {
+                  resolve(messageData);
+                });
+              } else {
+                resolve(messageData);
+              }
+            } else if (row.updated_at) {
+              messageData.updated_at = formatLocalTime(row.updated_at);
+              // 获取编辑历史
+              Message.getMessageVersions(row.id, false)
+                .then(versions => {
+                  messageData.editHistory = versions;
+                  resolve(messageData);
+                }).catch(() => {
+                  messageData.editHistory = [];
+                  resolve(messageData);
+                });
+            } else {
+              resolve(messageData);
             }
-          } else {
-            resolve(row);
           }
+        } else {
+          resolve(row);
         }
-      );
-    });
-  }
+      }
+    );
+  });
+}
 
   // 根据ID查找私聊消息
   static findPrivateById(id) {

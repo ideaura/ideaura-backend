@@ -139,3 +139,5 @@ ssl/
 # 开发用文件
 migrations/
 api.md
+scripts/
+APIDocs.md
