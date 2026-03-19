@@ -17,4 +17,23 @@ function authenticateToken(req, res, next) {
   }
 }
 
-module.exports = { authenticateToken };
+function authenticateOptionalToken(req, res, next) {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1];
+
+  if (token) {
+    try {
+      const user = verifyJWT(token);
+      req.user = user;
+    } catch (error) {
+      // 无效的令牌不设置用户信息，但允许请求继续
+      req.user = null;
+    }
+  } else {
+    req.user = null;
+  }
+  
+  next();
+}
+
+module.exports = { authenticateToken, authenticateOptionalToken };

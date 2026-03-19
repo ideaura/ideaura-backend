@@ -7,7 +7,7 @@ function generateToken() {
 }
 
 function generateJWT(payload) {
-  return jwt.sign(payload, config.jwtSecret, { expiresIn: '24h' });
+  return jwt.sign(payload, config.jwtSecret, { expiresIn: '90d' });
 }
 
 function verifyJWT(token) {

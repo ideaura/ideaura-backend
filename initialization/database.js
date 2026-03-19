@@ -1,631 +1,471 @@
+// initialization/database.js
 const db = require('../config/database');
-const { getDatabaseTimeString } = require('../utils/timezone');
 
-function initializeDatabase() {
-  return new Promise((resolve, reject) => {
-    console.log('开始全面检查数据库表结构...');
+/**
+ * PostgreSQL 数据库初始化
+ * 检查并修复表结构
+ */
+async function initializeDatabase() {
+  console.log('🚀 开始 PostgreSQL 数据库结构检查...');
 
-    const tableSchemas = [
-      {
-        name: 'users',
-        schema: `CREATE TABLE users (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          username TEXT NOT NULL,
-          email TEXT UNIQUE NOT NULL,
-          password TEXT NOT NULL,
-          email_verified INTEGER DEFAULT 0,
-          verification_token TEXT,
-          reset_token TEXT,
-          reset_token_expires DATETIME,
-          registration_order INTEGER,
-          created_at DATETIME DEFAULT (datetime('now', 'localtime')) -- 使用本地时间(UTC+8)
-        )`,
-        indexes: [
-          'CREATE INDEX IF NOT EXISTS idx_users_username ON users(username)',
-          'CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)',
-          'CREATE INDEX IF NOT EXISTS idx_users_registration_order ON users(registration_order)',
-          'CREATE INDEX IF NOT EXISTS idx_users_created_at ON users(created_at)',
-          'CREATE INDEX IF NOT EXISTS idx_users_reset_token ON users(reset_token)'
-        ],
-        // 定义需要检查和可能添加的列
-        columns: [
-          { name: 'registration_order', type: 'INTEGER' },
-          { name: 'reset_token', type: 'TEXT' },
-          { name: 'reset_token_expires', type: 'DATETIME' }
-        ]
-      },
-      {
-        name: 'email_verifications',
-        schema: `CREATE TABLE email_verifications (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          email TEXT NOT NULL,
-          token TEXT NOT NULL,
-          created_at DATETIME DEFAULT (datetime('now', 'localtime')) -- 使用本地时间(UTC+8)
-        )`,
-        indexes: [
-          'CREATE INDEX IF NOT EXISTS idx_email_verifications_token ON email_verifications(token)',
-          'CREATE INDEX IF NOT EXISTS idx_email_verifications_created_at ON email_verifications(created_at)'
-        ]
-      },
-      {
-        name: 'topics',
-        schema: `CREATE TABLE topics (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          name TEXT NOT NULL UNIQUE,
-          description TEXT,
-          announcement TEXT,
-          created_by INTEGER NOT NULL,
-          is_private BOOLEAN DEFAULT 1, -- 默认为私有话题
-          is_active BOOLEAN DEFAULT 1,
-          message_count INTEGER DEFAULT 0,
-          last_activity DATETIME, -- 使用本地时间(UTC+8)
-          created_at DATETIME DEFAULT (datetime('now', 'localtime')) -- 使用本地时间(UTC+8)
-        )`,
-        indexes: [
-          'CREATE INDEX IF NOT EXISTS idx_topics_name ON topics(name)',
-          'CREATE INDEX IF NOT EXISTS idx_topics_created_by ON topics(created_by)',
-          'CREATE INDEX IF NOT EXISTS idx_topics_is_private ON topics(is_private)',
-          'CREATE INDEX IF NOT EXISTS idx_topics_is_active ON topics(is_active)',
-          'CREATE INDEX IF NOT EXISTS idx_topics_last_activity ON topics(last_activity)',
-          'CREATE INDEX IF NOT EXISTS idx_topics_created_at ON topics(created_at)'
-        ],
-        // 定义需要检查和可能添加的列
-        columns: [
-          { name: 'is_private', type: 'BOOLEAN', default: '1' },
-          { name: 'is_active', type: 'BOOLEAN', default: '1' },
-          { name: 'message_count', type: 'INTEGER', default: '0' },
-          { name: 'last_activity', type: 'DATETIME' },
-          { name: 'announcement', type: 'TEXT' }
-        ]
-      },
-      {
-        name: 'topic_members',
-        schema: `CREATE TABLE topic_members (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          topic_id INTEGER NOT NULL,
-          user_id INTEGER NOT NULL,
-          role TEXT DEFAULT 'member', -- 角色: 'creator', 'admin', 'member'
-          joined_at DATETIME DEFAULT (datetime('now', 'localtime')), -- 使用本地时间(UTC+8)
-          FOREIGN KEY (topic_id) REFERENCES topics(id) ON DELETE CASCADE,
-          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-        )`,
-        indexes: [
-          'CREATE INDEX IF NOT EXISTS idx_topic_members_topic_id ON topic_members(topic_id)',
-          'CREATE INDEX IF NOT EXISTS idx_topic_members_user_id ON topic_members(user_id)',
-          'CREATE UNIQUE INDEX IF NOT EXISTS idx_topic_members_unique ON topic_members(topic_id, user_id)'
-        ],
-        // 定义需要检查和可能添加的列
-        columns: [
-          { name: 'role', type: 'TEXT', default: "'member'" }
-        ]
-      },
-      {
-        name: 'messages',
-        schema: `CREATE TABLE messages (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          topic_id INTEGER,
-          user_id INTEGER NOT NULL,
-          content TEXT NOT NULL,
-          created_at DATETIME DEFAULT (datetime('now', 'localtime')), -- 使用本地时间(UTC+8)
-          updated_at DATETIME, -- 编辑时间
-          deleted_at DATETIME, -- 删除时间
-          is_deleted BOOLEAN DEFAULT 0, -- 是否已删除
-          quoted_message_id INTEGER, -- 引用的消息ID
-          message_type TEXT DEFAULT 'normal', -- 消息类型: normal, forwarded, system
-          message_subtype TEXT DEFAULT 'text', -- 基本消息类型: text, image, video, file, markdown, html
-          forward_source_id INTEGER, -- 转发来源消息ID
-          file_url TEXT, -- 文件URL
-          file_name TEXT, -- 文件名
-          file_size INTEGER, -- 文件大小
-          file_type TEXT, -- 文件MIME类型
-          FOREIGN KEY (quoted_message_id) REFERENCES messages(id) ON DELETE SET NULL,
-          FOREIGN KEY (forward_source_id) REFERENCES messages(id) ON DELETE SET NULL
-        )`,
-        indexes: [
-          'CREATE INDEX IF NOT EXISTS idx_messages_topic_id ON messages(topic_id)',
-          'CREATE INDEX IF NOT EXISTS idx_messages_user_id ON messages(user_id)',
-          'CREATE INDEX IF NOT EXISTS idx_messages_created_at ON messages(created_at)',
-          'CREATE INDEX IF NOT EXISTS idx_messages_updated_at ON messages(updated_at)',
-          'CREATE INDEX IF NOT EXISTS idx_messages_deleted_at ON messages(deleted_at)',
-          'CREATE INDEX IF NOT EXISTS idx_messages_is_deleted ON messages(is_deleted)',
-          'CREATE INDEX IF NOT EXISTS idx_messages_quoted_message_id ON messages(quoted_message_id)',
-          'CREATE INDEX IF NOT EXISTS idx_messages_message_type ON messages(message_type)',
-          'CREATE INDEX IF NOT EXISTS idx_messages_message_subtype ON messages(message_subtype)',
-          'CREATE INDEX IF NOT EXISTS idx_messages_forward_source_id ON messages(forward_source_id)',
-          'CREATE INDEX IF NOT EXISTS idx_messages_file_type ON messages(file_type)'
-        ],
-        columns: [
-          { name: 'updated_at', type: 'DATETIME' },
-          { name: 'deleted_at', type: 'DATETIME' },
-          { name: 'is_deleted', type: 'BOOLEAN', default: '0' },
-          { name: 'quoted_message_id', type: 'INTEGER' },
-          { name: 'message_type', type: 'TEXT', default: "'normal'" },
-          { name: 'message_subtype', type: 'TEXT', default: "'text'" },
-          { name: 'forward_source_id', type: 'INTEGER' },
-          { name: 'file_url', type: 'TEXT' },
-          { name: 'file_name', type: 'TEXT' },
-          { name: 'file_size', type: 'INTEGER' },
-          { name: 'file_type', type: 'TEXT' }
-        ]
-      },
-      {
-        name: 'private_messages',
-        schema: `CREATE TABLE private_messages (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          sender_id INTEGER NOT NULL,
-          receiver_id INTEGER NOT NULL,
-          content TEXT NOT NULL,
-          is_read BOOLEAN DEFAULT 0,
-          created_at DATETIME DEFAULT (datetime('now', 'localtime')), -- 使用本地时间(UTC+8)
-          updated_at DATETIME, -- 编辑时间
-          deleted_at DATETIME, -- 删除时间
-          is_deleted BOOLEAN DEFAULT 0, -- 是否已删除
-          quoted_message_id INTEGER, -- 引用的消息ID
-          message_type TEXT DEFAULT 'normal', -- 消息类型: normal, forwarded, system
-          message_subtype TEXT DEFAULT 'text', -- 基本消息类型: text, image, video, file, markdown, html
-          forward_source_id INTEGER, -- 转发来源消息ID
-          file_url TEXT, -- 文件URL
-          file_name TEXT, -- 文件名
-          file_size INTEGER, -- 文件大小
-          file_type TEXT, -- 文件MIME类型
-          FOREIGN KEY (quoted_message_id) REFERENCES private_messages(id) ON DELETE SET NULL
-        )`,
-        indexes: [
-          'CREATE INDEX IF NOT EXISTS idx_private_messages_sender_id ON private_messages(sender_id)',
-          'CREATE INDEX IF NOT EXISTS idx_private_messages_receiver_id ON private_messages(receiver_id)',
-          'CREATE INDEX IF NOT EXISTS idx_private_messages_is_read ON private_messages(is_read)',
-          'CREATE INDEX IF NOT EXISTS idx_private_messages_created_at ON private_messages(created_at)',
-          'CREATE INDEX IF NOT EXISTS idx_private_messages_updated_at ON private_messages(updated_at)',
-          'CREATE INDEX IF NOT EXISTS idx_private_messages_deleted_at ON private_messages(deleted_at)',
-          'CREATE INDEX IF NOT EXISTS idx_private_messages_is_deleted ON private_messages(is_deleted)',
-          'CREATE INDEX IF NOT EXISTS idx_private_messages_quoted_message_id ON private_messages(quoted_message_id)',
-          'CREATE INDEX IF NOT EXISTS idx_private_messages_message_type ON private_messages(message_type)',
-          'CREATE INDEX IF NOT EXISTS idx_private_messages_message_subtype ON private_messages(message_subtype)',
-          'CREATE INDEX IF NOT EXISTS idx_private_messages_forward_source_id ON private_messages(forward_source_id)',
-          'CREATE INDEX IF NOT EXISTS idx_private_messages_file_type ON private_messages(file_type)'
-        ],
-        // 定义需要检查和可能添加的列
-        columns: [
-          { name: 'is_read', type: 'BOOLEAN', default: '0' },
-          { name: 'updated_at', type: 'DATETIME' },
-          { name: 'deleted_at', type: 'DATETIME' },
-          { name: 'is_deleted', type: 'BOOLEAN', default: '0' },
-          { name: 'quoted_message_id', type: 'INTEGER' },
-          { name: 'message_type', type: 'TEXT', default: "'normal'" },
-          { name: 'message_subtype', type: 'TEXT', default: "'text'" },
-          { name: 'forward_source_id', type: 'INTEGER' },
-          { name: 'file_url', type: 'TEXT' },
-          { name: 'file_name', type: 'TEXT' },
-          { name: 'file_size', type: 'INTEGER' },
-          { name: 'file_type', type: 'TEXT' }
-        ]
-      },
-      {
-        name: 'sessions',
-        schema: `CREATE TABLE sessions (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          user_id INTEGER NOT NULL,
-          socket_id TEXT,
-          created_at DATETIME DEFAULT (datetime('now', 'localtime')) -- 使用本地时间(UTC+8)
-        )`,
-        indexes: [
-          'CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id)',
-          'CREATE INDEX IF NOT EXISTS idx_sessions_socket_id ON sessions(socket_id)',
-          'CREATE INDEX IF NOT EXISTS idx_sessions_created_at ON sessions(created_at)'
-        ]
-      },
-      {
-        name: 'topic_muted_users',
-        schema: `CREATE TABLE topic_muted_users (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          topic_id INTEGER NOT NULL,
-          user_id INTEGER NOT NULL,
-          muted_by INTEGER NOT NULL,
-          reason TEXT,
-          created_at DATETIME DEFAULT (datetime('now', 'localtime')), -- 使用本地时间(UTC+8)
-          FOREIGN KEY (topic_id) REFERENCES topics(id) ON DELETE CASCADE,
-          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-          FOREIGN KEY (muted_by) REFERENCES users(id) ON DELETE CASCADE
-        )`,
-        indexes: [
-          'CREATE INDEX IF NOT EXISTS idx_topic_muted_users_topic_id ON topic_muted_users(topic_id)',
-          'CREATE INDEX IF NOT EXISTS idx_topic_muted_users_user_id ON topic_muted_users(user_id)',
-          'CREATE UNIQUE INDEX IF NOT EXISTS idx_topic_muted_users_unique ON topic_muted_users(topic_id, user_id)'
-        ]
-      },
-      {
-        name: 'message_versions',
-        schema: `CREATE TABLE message_versions (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          message_id INTEGER NOT NULL,
-          content TEXT NOT NULL,
-          created_at DATETIME DEFAULT (datetime('now', 'localtime')), -- 使用本地时间(UTC+8)
-          message_type TEXT CHECK(message_type IN ('public', 'private')) NOT NULL,
-          FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE
-        )`,
-        indexes: [
-          'CREATE INDEX IF NOT EXISTS idx_message_versions_message_id ON message_versions(message_id)',
-          'CREATE INDEX IF NOT EXISTS idx_message_versions_message_type ON message_versions(message_type)',
-          'CREATE INDEX IF NOT EXISTS idx_message_versions_created_at ON message_versions(created_at)'
-        ]
-      },
-      {
-        name: 'forwarded_messages',
-        schema: `CREATE TABLE forwarded_messages (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          original_message_id INTEGER NOT NULL,
-          forwarded_message_id INTEGER NOT NULL,
-          forwarder_id INTEGER NOT NULL,
-          created_at DATETIME DEFAULT (datetime('now', 'localtime')), -- 使用本地时间(UTC+8)
-          message_type TEXT CHECK(message_type IN ('public', 'private')) NOT NULL,
-          FOREIGN KEY (original_message_id) REFERENCES messages(id) ON DELETE CASCADE,
-          FOREIGN KEY (forwarded_message_id) REFERENCES messages(id) ON DELETE CASCADE,
-          FOREIGN KEY (forwarder_id) REFERENCES users(id) ON DELETE CASCADE
-        )`,
-        indexes: [
-          'CREATE INDEX IF NOT EXISTS idx_forwarded_messages_original_message_id ON forwarded_messages(original_message_id)',
-          'CREATE INDEX IF NOT EXISTS idx_forwarded_messages_forwarded_message_id ON forwarded_messages(forwarded_message_id)',
-          'CREATE INDEX IF NOT EXISTS idx_forwarded_messages_forwarder_id ON forwarded_messages(forwarder_id)',
-          'CREATE INDEX IF NOT EXISTS idx_forwarded_messages_message_type ON forwarded_messages(message_type)',
-          'CREATE INDEX IF NOT EXISTS idx_forwarded_messages_created_at ON forwarded_messages(created_at)'
-        ]
-      }
-    ];
+  try {
+    // 简单的连接测试
+    const result = await db.pool.query('SELECT NOW()');
+    console.log('✅ PostgreSQL 数据库连接验证成功');
 
-    let tablesProcessed = 0;
-    let tablesCreated = 0;
-    let indexesCreated = 0;
-    let columnsAdded = 0;
+    // 检查并创建所有表
+    await checkAndCreateTables();
 
-    // 检查并创建每个表
-    tableSchemas.forEach(table => {
+    // 验证表是否创建成功
+    const tables = await db.pool.query(`
+      SELECT tablename FROM pg_tables 
+      WHERE schemaname = 'public'
+    `);
+
+    console.log(`📡 数据库中共有 ${tables.rowCount} 个表`);
+
+    // 检查并修复表结构
+    await checkAndRepairTableStructures();
+
+    console.log('✅ 数据库结构检查完成');
+    return true;
+  } catch (error) {
+    console.error('❌ PostgreSQL 数据库初始化失败:', error);
+    throw error;
+  }
+}
+
+/**
+ * 检查表是否存在，不存在则创建
+ */
+async function checkAndCreateTables() {
+  console.log('📦 检查数据库表...');
+
+  // 定义所有表的创建语句
+  const tableDefinitions = {
+    users: `
+      CREATE TABLE IF NOT EXISTS users (
+        id VARCHAR(255) PRIMARY KEY,
+        username VARCHAR(255) NOT NULL,
+        email VARCHAR(255) NOT NULL,
+        password VARCHAR(255),
+        email_verified BOOLEAN DEFAULT FALSE,
+        verification_token VARCHAR(255),
+        reset_token VARCHAR(255),
+        reset_token_expires TIMESTAMP,
+        registration_order INTEGER,
+        avatar_url TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP,
+        UNIQUE(email)
+      )
+    `,
+
+    topics: `
+      CREATE TABLE IF NOT EXISTS topics (
+        id SERIAL PRIMARY KEY,
+        name VARCHAR(255) NOT NULL,
+        description TEXT,
+        announcement TEXT,
+        created_by VARCHAR(255) REFERENCES users(id),
+        is_private BOOLEAN DEFAULT TRUE,
+        is_active BOOLEAN DEFAULT TRUE,
+        message_count INTEGER DEFAULT 0,
+        last_activity TIMESTAMP,
+        avatar_url TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP
+      )
+    `,
+
+    topic_members: `
+      CREATE TABLE IF NOT EXISTS topic_members (
+        id SERIAL PRIMARY KEY,
+        topic_id INTEGER REFERENCES topics(id) ON DELETE CASCADE,
+        user_id VARCHAR(255) REFERENCES users(id) ON DELETE CASCADE,
+        role VARCHAR(50) DEFAULT 'member',
+        joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(topic_id, user_id)
+      )
+    `,
+
+    topic_muted_users: `
+      CREATE TABLE IF NOT EXISTS topic_muted_users (
+        id SERIAL PRIMARY KEY,
+        topic_id INTEGER REFERENCES topics(id) ON DELETE CASCADE,
+        user_id VARCHAR(255) REFERENCES users(id) ON DELETE CASCADE,
+        muted_by VARCHAR(255) REFERENCES users(id),
+        reason TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(topic_id, user_id)
+      )
+    `,
+
+    messages: `
+      CREATE TABLE IF NOT EXISTS messages (
+        id SERIAL PRIMARY KEY,
+        topic_id INTEGER REFERENCES topics(id) ON DELETE CASCADE,
+        user_id VARCHAR(255) REFERENCES users(id),
+        content TEXT,
+        message_type VARCHAR(50) DEFAULT 'normal',
+        message_subtype VARCHAR(50) DEFAULT 'text',
+        source_type VARCHAR(50) DEFAULT 'chatroom',
+        forward_source_id INTEGER,
+        quoted_message_id INTEGER,
+        file_url TEXT,
+        file_name VARCHAR(255),
+        file_size INTEGER,
+        file_type VARCHAR(255),
+        is_deleted BOOLEAN DEFAULT FALSE,
+        deleted_at TIMESTAMP,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP
+      )
+    `,
+
+    private_messages: `
+      CREATE TABLE IF NOT EXISTS private_messages (
+        id SERIAL PRIMARY KEY,
+        sender_id VARCHAR(255) REFERENCES users(id),
+        receiver_id VARCHAR(255) REFERENCES users(id),
+        content TEXT,
+        is_read BOOLEAN DEFAULT FALSE,
+        message_type VARCHAR(50) DEFAULT 'normal',
+        message_subtype VARCHAR(50) DEFAULT 'text',
+        source_type VARCHAR(50) DEFAULT 'private',
+        forward_source_id INTEGER,
+        quoted_message_id INTEGER,
+        file_url TEXT,
+        file_name VARCHAR(255),
+        file_size INTEGER,
+        file_type VARCHAR(255),
+        is_deleted BOOLEAN DEFAULT FALSE,
+        deleted_at TIMESTAMP,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP
+      )
+    `,
+
+    message_versions: `
+      CREATE TABLE IF NOT EXISTS message_versions (
+        id SERIAL PRIMARY KEY,
+        message_id INTEGER NOT NULL,
+        content TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        message_type VARCHAR(50) DEFAULT 'public'
+      )
+    `,
+
+    forwarded_messages: `
+      CREATE TABLE IF NOT EXISTS forwarded_messages (
+        id SERIAL PRIMARY KEY,
+        original_message_id INTEGER NOT NULL,
+        forwarded_message_id INTEGER NOT NULL,
+        forwarder_id VARCHAR(255) REFERENCES users(id),
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        message_type VARCHAR(50) DEFAULT 'public'
+      )
+    `,
+
+    communities: `
+      CREATE TABLE IF NOT EXISTS communities (
+        id SERIAL PRIMARY KEY,
+        topic_id INTEGER REFERENCES topics(id),
+        name VARCHAR(255) NOT NULL,
+        description TEXT,
+        tags TEXT,
+        avatar_url TEXT,
+        cover_image_url TEXT,
+        created_by VARCHAR(255) REFERENCES users(id),
+        type VARCHAR(50) DEFAULT 'public',
+        join_policy VARCHAR(50) DEFAULT 'open',
+        member_count INTEGER DEFAULT 0,
+        post_count INTEGER DEFAULT 0,
+        is_active BOOLEAN DEFAULT TRUE,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP,
+        UNIQUE(name)
+      )
+    `,
+
+    community_members: `
+      CREATE TABLE IF NOT EXISTS community_members (
+        id SERIAL PRIMARY KEY,
+        community_id INTEGER REFERENCES communities(id) ON DELETE CASCADE,
+        user_id VARCHAR(255) REFERENCES users(id) ON DELETE CASCADE,
+        role VARCHAR(50) DEFAULT 'member',
+        join_reason TEXT,
+        joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        left_at TIMESTAMP,
+        status VARCHAR(50) DEFAULT 'active',
+        UNIQUE(community_id, user_id)
+      )
+    `,
+
+    subsections: `
+      CREATE TABLE IF NOT EXISTS subsections (
+        id SERIAL PRIMARY KEY,
+        community_id INTEGER REFERENCES communities(id) ON DELETE CASCADE,
+        name VARCHAR(255) NOT NULL,
+        description TEXT,
+        order_num INTEGER DEFAULT 0,
+        is_active BOOLEAN DEFAULT TRUE,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP,
+        UNIQUE(community_id, name)
+      )
+    `,
+
+    posts: `
+      CREATE TABLE IF NOT EXISTS posts (
+        id SERIAL PRIMARY KEY,
+        community_id INTEGER REFERENCES communities(id),
+        user_id VARCHAR(255) REFERENCES users(id),
+        subsection_id INTEGER REFERENCES subsections(id),
+        category_id INTEGER,
+        title VARCHAR(255) NOT NULL,
+        content TEXT,
+        tags TEXT,
+        attachment_urls TEXT,
+        type VARCHAR(50) DEFAULT 'discussion',
+        view_count INTEGER DEFAULT 0,
+        like_count INTEGER DEFAULT 0,
+        comment_count INTEGER DEFAULT 0,
+        share_count INTEGER DEFAULT 0,
+        status VARCHAR(50) DEFAULT 'published',
+        published_at TIMESTAMP,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP
+      )
+    `,
+
+    blog_categories: `
+      CREATE TABLE IF NOT EXISTS blog_categories (
+        id SERIAL PRIMARY KEY,
+        name VARCHAR(255) NOT NULL,
+        description TEXT,
+        user_id VARCHAR(255) REFERENCES users(id),
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP,
+        UNIQUE(user_id, name)
+      )
+    `,
+
+    moments: `
+      CREATE TABLE IF NOT EXISTS moments (
+        id SERIAL PRIMARY KEY,
+        user_id VARCHAR(255) REFERENCES users(id),
+        content TEXT,
+        type VARCHAR(50) DEFAULT 'public',
+        visibility VARCHAR(50) DEFAULT 'public',
+        likes_count INTEGER DEFAULT 0,
+        comments_count INTEGER DEFAULT 0,
+        deleted_at TIMESTAMP,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP
+      )
+    `,
+
+    follows: `
+      CREATE TABLE IF NOT EXISTS follows (
+        id SERIAL PRIMARY KEY,
+        follower_id VARCHAR(255) REFERENCES users(id),
+        following_id VARCHAR(255) REFERENCES users(id),
+        status VARCHAR(50) DEFAULT 'active',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP,
+        UNIQUE(follower_id, following_id)
+      )
+    `,
+
+    friends: `
+      CREATE TABLE IF NOT EXISTS friends (
+        id SERIAL PRIMARY KEY,
+        user1_id VARCHAR(255) REFERENCES users(id),
+        user2_id VARCHAR(255) REFERENCES users(id),
+        status VARCHAR(50) DEFAULT 'pending',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP,
+        UNIQUE(user1_id, user2_id)
+      )
+    `,
+
+    comments: `
+      CREATE TABLE IF NOT EXISTS comments (
+        id SERIAL PRIMARY KEY,
+        user_id VARCHAR(255) REFERENCES users(id),
+        target_type VARCHAR(50) NOT NULL,
+        target_id INTEGER NOT NULL,
+        content TEXT,
+        parent_id INTEGER REFERENCES comments(id),
+        status VARCHAR(50) DEFAULT 'active',
+        deleted_at TIMESTAMP,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP
+      )
+    `,
+
+    likes: `
+      CREATE TABLE IF NOT EXISTS likes (
+        id SERIAL PRIMARY KEY,
+        user_id VARCHAR(255) REFERENCES users(id),
+        target_type VARCHAR(50) NOT NULL,
+        target_id INTEGER NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(user_id, target_type, target_id)
+      )
+    `
+  };
+
+  // 按依赖顺序检查并创建表
+  const tableOrder = [
+    'users', 'topics', 'topic_members', 'topic_muted_users',
+    'messages', 'private_messages', 'message_versions', 'forwarded_messages',
+    'communities', 'community_members', 'subsections', 'posts',
+    'blog_categories', 'moments', 'follows', 'friends',
+    'comments', 'likes'
+  ];
+
+  for (const tableName of tableOrder) {
+    try {
       // 检查表是否存在
-      db.get(`SELECT name FROM sqlite_master WHERE type='table' AND name='${table.name}'`, (err, row) => {
-        if (err) {
-          console.error(`检查表 ${table.name} 错误:`, err);
-          reject(err);
-          return;
-        }
+      const tableExists = await db.pool.query(`
+        SELECT EXISTS (
+          SELECT FROM information_schema.tables 
+          WHERE table_schema = 'public' 
+          AND table_name = $1
+        )
+      `, [tableName]);
 
-        if (!row) {
-          // 表不存在，创建它
-          console.log(`表 ${table.name} 不存在，正在创建...`);
-          db.run(table.schema, (err) => {
-            if (err) {
-              console.error(`创建表 ${table.name} 错误:`, err);
-              reject(err);
-              return;
-            }
-            console.log(`✅ 表 ${table.name} 创建成功`);
-            tablesCreated++;
-            
-            // 创建索引
-            createIndexesForTable(table);
-          });
-        } else {
-          // 表已存在，检查是否需要添加新列并创建缺失的索引
-          console.log(`✅ 表 ${table.name} 已存在，检查结构完整性...`);
-          checkAndUpgradeTable(table, () => {
-            createIndexesForTable(table);
-          });
-        }
-      });
-
-      // 检查并升级表结构
-      function checkAndUpgradeTable(table, callback) {
-        // 获取当前表结构
-        db.all(`PRAGMA table_info(${table.name})`, (err, currentColumns) => {
-          if (err) {
-            console.error(`获取表 ${table.name} 结构错误:`, err);
-            callback();
-            return;
-          }
-
-          // 检查是否需要添加新列
-          if (table.columns && table.columns.length > 0) {
-            let columnsProcessed = 0;
-            let columnsToAdd = [];
-
-            table.columns.forEach(column => {
-              // 检查列是否已存在
-              const columnExists = currentColumns.some(col => col.name === column.name);
-              
-              if (!columnExists) {
-                columnsToAdd.push(column);
-              }
-            });
-
-            if (columnsToAdd.length > 0) {
-              // 添加缺失的列
-              addMissingColumns(table.name, columnsToAdd, () => {
-                columnsAdded += columnsToAdd.length;
-                callback();
-              });
-            } else {
-              callback();
-            }
-          } else {
-            callback();
-          }
-        });
+      if (!tableExists.rows[0].exists) {
+        console.log(`  ➕ 创建表: ${tableName}`);
+        await db.pool.query(tableDefinitions[tableName]);
+      } else {
+        console.log(`  ✅ 表已存在: ${tableName}`);
       }
-
-      // 添加缺失的列
-      function addMissingColumns(tableName, columns, callback) {
-        if (columns.length === 0) {
-          callback();
-          return;
-        }
-
-        let columnsProcessed = 0;
-        
-        columns.forEach(column => {
-          let sql = `ALTER TABLE ${tableName} ADD COLUMN ${column.name} ${column.type}`;
-          if (column.default !== undefined) {
-            sql += ` DEFAULT ${column.default}`;
-          }
-          
-          db.run(sql, (err) => {
-            columnsProcessed++;
-            if (err) {
-              console.error(`添加列 ${column.name} 到表 ${tableName} 错误:`, err);
-            } else {
-              console.log(`✅ 列 ${column.name} 已添加到表 ${tableName}`);
-            }
-            
-            if (columnsProcessed === columns.length) {
-              callback();
-            }
-          });
-        });
-      }
-
-      function createIndexesForTable(table) {
-        if (table.indexes && table.indexes.length > 0) {
-          let indexesProcessed = 0;
-          
-          table.indexes.forEach(indexSql => {
-            db.run(indexSql, (err) => {
-              if (err) {
-                console.error(`创建索引错误 (${indexSql}):`, err);
-              } else {
-                indexesCreated++;
-                const indexName = indexSql.split(' ')[5]; // 提取索引名
-                console.log(`✅ 索引创建成功: ${indexName}`);
-              }
-              
-              indexesProcessed++;
-              if (indexesProcessed === table.indexes.length) {
-                tableComplete();
-              }
-            });
-          });
-        } else {
-          tableComplete();
-        }
-      }
-
-      function tableComplete() {
-        tablesProcessed++;
-        if (tablesProcessed === tableSchemas.length) {
-          console.log(`\n数据库检查完成:`);
-          console.log(`- 检查了 ${tableSchemas.length} 个表`);
-          console.log(`- 创建了 ${tablesCreated} 个新表`);
-          console.log(`- 添加了 ${columnsAdded} 个新列`);
-          console.log(`- 创建了 ${indexesCreated} 个索引`);
-          console.log('✅ 数据库结构完整\n');
-          
-          // 如果有结构更新，执行数据修复
-          if (columnsAdded > 0) {
-            performDataFixes(() => {
-              resolve();
-            });
-          } else {
-            resolve();
-          }
-        }
-      }
-    });
-
-    // 执行数据修复操作
-    function performDataFixes(callback) {
-      console.log('开始执行数据修复...');
-      let fixesCompleted = 0;
-      const totalFixes = 4; // 现在有4个修复操作
-      let hasError = false;
-
-      // 修复1: 为现有用户设置注册顺序
-      fixUserRegistrationOrder(() => {
-        fixesCompleted++;
-        if (fixesCompleted === totalFixes && !hasError) {
-          console.log('✅ 所有数据修复完成');
-          callback();
-        }
-      });
-
-      // 修复2: 为现有话题成员设置默认角色
-      fixTopicMemberRoles(() => {
-        fixesCompleted++;
-        if (fixesCompleted === totalFixes && !hasError) {
-          console.log('✅ 所有数据修复完成');
-          callback();
-        }
-      });
-
-      // 修复3: 为现有私聊消息设置已读状态
-      fixPrivateMessageReadStatus(() => {
-        fixesCompleted++;
-        if (fixesCompleted === totalFixes && !hasError) {
-          console.log('✅ 所有数据修复完成');
-          callback();
-        }
-      });
-
-      // 修复4: 清理过期的密码重置令牌
-      cleanExpiredResetTokens(() => {
-        fixesCompleted++;
-        if (fixesCompleted === totalFixes && !hasError) {
-          console.log('✅ 所有数据修复完成');
-          callback();
-        }
-      });
-
-      // 错误处理函数
-      function handleError(error) {
-        if (!hasError) {
-          hasError = true;
-          console.error('数据修复过程中发生错误:', error);
-        }
-      }
-
-      // 修复用户注册顺序
-      function fixUserRegistrationOrder(cb) {
-        db.get("SELECT COUNT(*) as count FROM users WHERE registration_order IS NULL", (err, row) => {
-          if (err) {
-            console.error('检查用户注册顺序错误:', err);
-            handleError(err);
-            cb();
-            return;
-          }
-
-          if (row && row.count > 0) {
-            console.log(`发现 ${row.count} 个用户需要修复注册顺序...`);
-            
-            // 获取所有用户按注册时间排序
-            db.all("SELECT id, created_at FROM users ORDER BY created_at ASC", (err, users) => {
-              if (err) {
-                console.error('获取用户列表错误:', err);
-                handleError(err);
-                cb();
-                return;
-              }
-
-              if (users.length === 0) {
-                cb();
-                return;
-              }
-
-              let updatedCount = 0;
-              users.forEach((user, index) => {
-                const registrationOrder = index + 1;
-                
-                db.run(
-                  "UPDATE users SET registration_order = ? WHERE id = ?",
-                  [registrationOrder, user.id],
-                  (err) => {
-                    if (err) {
-                      console.error(`更新用户 ${user.id} 注册顺序错误:`, err);
-                    } else {
-                      updatedCount++;
-                    }
-                    
-                    if (updatedCount === users.length) {
-                      console.log(`✅ 已修复 ${updatedCount} 个用户的注册顺序`);
-                      cb();
-                    } else if (updatedCount < users.length) {
-                      // 继续处理其他用户
-                    } else {
-                      cb();
-                    }
-                  }
-                );
-              });
-            });
-          } else {
-            console.log('✅ 用户注册顺序无需修复');
-            cb();
-          }
-        });
-      }
-
-      // 修复话题成员角色
-      function fixTopicMemberRoles(cb) {
-        db.get("SELECT COUNT(*) as count FROM topic_members WHERE role IS NULL OR role = ''", (err, row) => {
-          if (err) {
-            console.error('检查话题成员角色错误:', err);
-            handleError(err);
-            cb();
-            return;
-          }
-
-          if (row && row.count > 0) {
-            console.log(`发现 ${row.count} 个话题成员需要修复角色...`);
-            
-            // 首先将所有成员设置为默认成员角色
-            db.run("UPDATE topic_members SET role = 'member' WHERE role IS NULL OR role = ''", (err) => {
-              if (err) {
-                console.error('更新话题成员角色错误:', err);
-                handleError(err);
-                cb();
-                return;
-              }
-              
-              console.log('✅ 话题成员角色修复完成');
-              cb();
-            });
-          } else {
-            console.log('✅ 话题成员角色无需修复');
-            cb();
-          }
-        });
-      }
-
-      // 修复私聊消息已读状态
-      function fixPrivateMessageReadStatus(cb) {
-        db.get("SELECT COUNT(*) as count FROM private_messages WHERE is_read IS NULL", (err, row) => {
-          if (err) {
-            console.error('检查私聊消息已读状态错误:', err);
-            handleError(err);
-            cb();
-            return;
-          }
-
-          if (row && row.count > 0) {
-            console.log(`发现 ${row.count} 个私聊消息需要修复已读状态...`);
-            
-            // 将所有消息设置为未读
-            db.run("UPDATE private_messages SET is_read = 0 WHERE is_read IS NULL", (err) => {
-              if (err) {
-                console.error('更新私聊消息已读状态错误:', err);
-                handleError(err);
-                cb();
-                return;
-              }
-              
-              console.log('✅ 私聊消息已读状态修复完成');
-              cb();
-            });
-          } else {
-            console.log('✅ 私聊消息已读状态无需修复');
-            cb();
-          }
-        });
-      }
-
-      // 清理过期的密码重置令牌
-      function cleanExpiredResetTokens(cb) {
-        db.run(
-          "UPDATE users SET reset_token = NULL, reset_token_expires = NULL WHERE reset_token_expires <= datetime('now')",
-          function(err) {
-            if (err) {
-              console.error('清理过期密码重置令牌错误:', err);
-              handleError(err);
-              cb();
-              return;
-            }
-            
-            if (this.changes > 0) {
-              console.log(`✅ 清理了 ${this.changes} 个过期的密码重置令牌`);
-            } else {
-              console.log('✅ 没有需要清理的过期密码重置令牌');
-            }
-            
-            cb();
-          }
-        );
-      }
+    } catch (error) {
+      console.error(`  ❌ 处理表 ${tableName} 时出错:`, error.message);
+      throw error;
     }
-  });
+  }
+}
+
+/**
+ * 检查并修复表结构（添加缺失的索引和约束）
+ */
+async function checkAndRepairTableStructures() {
+  console.log('🔧 检查并修复表结构...');
+
+  // 定义所有需要检查的索引
+  const indexDefinitions = [
+    // users 表索引
+    { name: 'idx_users_username', table: 'users', column: 'username' },
+    { name: 'idx_users_email', table: 'users', column: 'email' },
+    { name: 'idx_users_verification_token', table: 'users', column: 'verification_token' },
+    { name: 'idx_users_reset_token', table: 'users', column: 'reset_token' },
+
+    // topics 表索引
+    { name: 'idx_topics_name', table: 'topics', column: 'name' },
+    { name: 'idx_topics_created_by', table: 'topics', column: 'created_by' },
+    { name: 'idx_topics_last_activity', table: 'topics', column: 'last_activity' },
+
+    // topic_members 索引
+    { name: 'idx_topic_members_topic_id', table: 'topic_members', column: 'topic_id' },
+    { name: 'idx_topic_members_user_id', table: 'topic_members', column: 'user_id' },
+
+    // messages 索引
+    { name: 'idx_messages_topic_id', table: 'messages', column: 'topic_id' },
+    { name: 'idx_messages_user_id', table: 'messages', column: 'user_id' },
+    { name: 'idx_messages_created_at', table: 'messages', column: 'created_at' },
+    { name: 'idx_messages_topic_id_created_at', table: 'messages', columns: ['topic_id', 'created_at'] },
+
+    // private_messages 索引
+    { name: 'idx_private_messages_sender_id', table: 'private_messages', column: 'sender_id' },
+    { name: 'idx_private_messages_receiver_id', table: 'private_messages', column: 'receiver_id' },
+    { name: 'idx_private_messages_sender_receiver', table: 'private_messages', columns: ['sender_id', 'receiver_id'] },
+    { name: 'idx_private_messages_created_at', table: 'private_messages', column: 'created_at' },
+
+    // message_versions 索引
+    { name: 'idx_message_versions_message_id', table: 'message_versions', column: 'message_id' },
+
+    // communities 索引
+    { name: 'idx_communities_name', table: 'communities', column: 'name' },
+    { name: 'idx_communities_topic_id', table: 'communities', column: 'topic_id' },
+    { name: 'idx_communities_created_by', table: 'communities', column: 'created_by' },
+
+    // community_members 索引
+    { name: 'idx_community_members_community_id', table: 'community_members', column: 'community_id' },
+    { name: 'idx_community_members_user_id', table: 'community_members', column: 'user_id' },
+
+    // posts 索引
+    { name: 'idx_posts_community_id', table: 'posts', column: 'community_id' },
+    { name: 'idx_posts_user_id', table: 'posts', column: 'user_id' },
+    { name: 'idx_posts_subsection_id', table: 'posts', column: 'subsection_id' },
+    { name: 'idx_posts_created_at', table: 'posts', column: 'created_at' },
+    { name: 'idx_posts_type', table: 'posts', column: 'type' },
+
+    // moments 索引
+    { name: 'idx_moments_user_id', table: 'moments', column: 'user_id' },
+    { name: 'idx_moments_created_at', table: 'moments', column: 'created_at' },
+    { name: 'idx_moments_visibility', table: 'moments', column: 'visibility' },
+
+    // follows 索引
+    { name: 'idx_follows_follower_id', table: 'follows', column: 'follower_id' },
+    { name: 'idx_follows_following_id', table: 'follows', column: 'following_id' },
+
+    // friends 索引
+    { name: 'idx_friends_user1_id', table: 'friends', column: 'user1_id' },
+    { name: 'idx_friends_user2_id', table: 'friends', column: 'user2_id' },
+    { name: 'idx_friends_status', table: 'friends', column: 'status' },
+
+    // comments 索引
+    { name: 'idx_comments_target', table: 'comments', columns: ['target_type', 'target_id'] },
+    { name: 'idx_comments_user_id', table: 'comments', column: 'user_id' },
+    { name: 'idx_comments_parent_id', table: 'comments', column: 'parent_id' },
+
+    // likes 索引
+    { name: 'idx_likes_target', table: 'likes', columns: ['target_type', 'target_id'] },
+    { name: 'idx_likes_user_id', table: 'likes', column: 'user_id' }
+  ];
+
+  for (const indexDef of indexDefinitions) {
+    try {
+      // 检查索引是否存在
+      const indexExists = await db.pool.query(`
+        SELECT EXISTS (
+          SELECT FROM pg_indexes 
+          WHERE schemaname = 'public' 
+          AND tablename = $1 
+          AND indexname = $2
+        )
+      `, [indexDef.table, indexDef.name]);
+
+      if (!indexExists.rows[0].exists) {
+        // 检查表是否存在
+        const tableExists = await db.pool.query(`
+          SELECT EXISTS (
+            SELECT FROM information_schema.tables 
+            WHERE table_schema = 'public' 
+            AND table_name = $1
+          )
+        `, [indexDef.table]);
+
+        if (tableExists.rows[0].exists) {
+          // 创建索引
+          let columnClause = indexDef.column || indexDef.columns.join(', ');
+          console.log(`  🔨 创建索引: ${indexDef.name} ON ${indexDef.table}(${columnClause})`);
+
+          await db.pool.query(`
+            CREATE INDEX CONCURRENTLY IF NOT EXISTS ${indexDef.name} 
+            ON ${indexDef.table} (${columnClause})
+          `);
+        }
+      }
+    } catch (error) {
+      console.error(`  ⚠️ 处理索引 ${indexDef.name} 时出错:`, error.message);
+      // 继续处理下一个索引，不中断流程
+    }
+  }
 }
 
 module.exports = { initializeDatabase };

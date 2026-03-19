@@ -1,27 +1,60 @@
 const db = require('../config/database');
-const { formatLocalTime } = require('../utils/timezone');
+const time = require('../utils/time');
+const { invalidateTopicCache } = require('../services/mqtt');
+
+// Helper: format a raw DB topic row into the API-docs-compliant shape.
+// Strips internal/extra fields, normalises date strings, converts PG booleans
+// to integers (1/0) so the frontend keeps working the same as before.
+function formatTopicRow(row, latestMessageRow = null) {
+  const formatDate = (val) => {
+    if (!val) return null;
+    // If already a formatted string (YYYY-MM-DD HH:MM:SS) pass through
+    if (typeof val === 'string' && /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(val)) return val;
+    return time.formatLocalTime(val);
+  };
+
+  return {
+    id: row.id,
+    name: row.name,
+    description: row.description || null,
+    avatar_url: row.avatar_url || null,
+    created_by: row.created_by,
+    creatorName: row.creatorName || row.creatorname || null,
+    creatorAvatar: row.creatorAvatar || row.creatoravatar || null,
+    is_private: row.is_private === true ? 1 : (row.is_private === false ? 0 : row.is_private),
+    is_active: row.is_active === true ? 1 : (row.is_active === false ? 0 : row.is_active),
+    message_count: row.message_count || 0,
+    last_activity: formatDate(row.last_activity),
+    created_at: formatDate(row.created_at),
+    linked_community_id: row.linked_community_id || null,
+    latestMessage: (latestMessageRow && latestMessageRow.msg_id) ? {
+      content: `${latestMessageRow.msg_senderName || latestMessageRow.msg_sendername || ''}：${latestMessageRow.msg_content || ''}`,
+      createdAt: formatDate(latestMessageRow.msg_created_at)
+    } : null
+  };
+}
 
 class Topic {
   static create(topicData) {
     return new Promise((resolve, reject) => {
-      // 所有话题默认为私有
-      const { name, description, created_by } = topicData;
-      const is_private = 1; // 强制设置为私有
-      
+      // 获取话题相关数据，包括是否为私有
+      const { name, description, created_by, avatar_url = null } = topicData;
+      const is_private = topicData.is_private !== undefined ? topicData.is_private : 1; // 如果没有提供，默认为私有
+
       // 使用本地时间
-      const currentTime = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false });
-      
+      const currentTime = time.formatDatabaseTime();
+
       db.run(
-        "INSERT INTO topics (name, description, announcement, created_by, is_private, is_active, message_count, last_activity, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        [name, description, null, created_by, is_private, 1, 0, currentTime, currentTime],
-        function(err) {
+        "INSERT INTO topics (name, description, announcement, created_by, is_private, is_active, message_count, last_activity, created_at, avatar_url) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+        [name, description, null, created_by, is_private, 1, 0, currentTime, currentTime, avatar_url],
+        function (err) {
           if (err) return reject(err);
-          
+
           const topicId = this.lastID;
-          
+
           // 自动将创建者加入话题并设为创建者角色
           db.run(
-            "INSERT INTO topic_members (topic_id, user_id, role, joined_at) VALUES (?, ?, 'creator', ?)",
+            "INSERT INTO topic_members (topic_id, user_id, role, joined_at) VALUES (?, ?, 'creator', ?) RETURNING id",
             [topicId, created_by, currentTime],
             (err) => {
               if (err) {
@@ -39,11 +72,11 @@ class Topic {
   static findByUser(userId, limit = 50) {
     return new Promise((resolve, reject) => {
       db.all(
-        `SELECT t.*, u.id as creatorId, u.username as creatorName
+        `SELECT t.*, u.id as "creatorId", u.username as "creatorName", u.avatar_url as "creatorAvatar"
          FROM topics t
          LEFT JOIN users u ON t.created_by = u.id
          INNER JOIN topic_members tm ON t.id = tm.topic_id
-         WHERE tm.user_id = ? AND t.is_active = 1
+         WHERE tm.user_id = ? AND t.is_active = true
          ORDER BY t.last_activity DESC, t.created_at DESC
          LIMIT ?`,
         [userId, limit],
@@ -59,29 +92,36 @@ class Topic {
   static findByUserWithLatestMessage(userId, limit = 50) {
     return new Promise((resolve, reject) => {
       db.all(
-        `SELECT t.*, u.id as creatorId, u.username as creatorName
+        `SELECT 
+           t.*, 
+           u.id as "creatorId", 
+           u.username as "creatorName", 
+           u.avatar_url as "creatorAvatar",
+           m.id as msg_id,
+           m.content as msg_content,
+           m.created_at as msg_created_at,
+           mu.username as msg_senderName,
+           mu.avatar_url as msg_senderAvatar
          FROM topics t
          LEFT JOIN users u ON t.created_by = u.id
          INNER JOIN topic_members tm ON t.id = tm.topic_id
-         WHERE tm.user_id = ? AND t.is_active = 1
+         LEFT JOIN (
+           SELECT topic_id, MAX(id) as max_id
+           FROM messages
+           WHERE is_deleted = false
+           GROUP BY topic_id
+         ) latest ON latest.topic_id = t.id
+         LEFT JOIN messages m ON m.id = latest.max_id
+         LEFT JOIN users mu ON m.user_id = mu.id
+         WHERE tm.user_id = ? AND t.is_active = true
          ORDER BY t.last_activity DESC, t.created_at DESC
          LIMIT ?`,
         [userId, limit],
-        async (err, rows) => {
+        (err, rows) => {
           if (err) return reject(err);
-          
-          // 为每个话题获取最新消息
-          const topicsWithLatestMessage = await Promise.all(rows.map(async (topic) => {
-            const latestMessage = await require('./Message').getLatestMessageByTopic(topic.id);
-            return {
-              ...topic,
-              latestMessage: latestMessage ? {
-                content: `${latestMessage.senderName}：${latestMessage.content}`,
-                createdAt: latestMessage.created_at
-              } : null
-            };
-          }));
-          
+
+          const topicsWithLatestMessage = rows.map((row) => formatTopicRow(row, row));
+
           resolve(topicsWithLatestMessage);
         }
       );
@@ -92,13 +132,13 @@ class Topic {
   static getPopularTopics(limit = 10) {
     return new Promise((resolve, reject) => {
       db.all(
-        `SELECT t.*, u.id as creatorId, u.username as creatorName, COUNT(m.id) as message_count
+        `SELECT t.*, u.id as "creatorId", u.username as "creatorName", u.avatar_url as "creatorAvatar", COUNT(m.id) as message_count
          FROM topics t
          LEFT JOIN users u ON t.created_by = u.id
          LEFT JOIN messages m ON t.id = m.topic_id
-         WHERE t.is_active = 1
-         GROUP BY t.id
-         ORDER BY message_count DESC, t.last_activity DESC
+         WHERE t.is_active = true
+         GROUP BY t.id, u.id, u.username, u.avatar_url
+         ORDER BY COUNT(m.id) DESC, t.last_activity DESC
          LIMIT ?`,
         [limit],
         (err, rows) => {
@@ -113,30 +153,38 @@ class Topic {
   static getPopularTopicsWithLatestMessage(limit = 10) {
     return new Promise((resolve, reject) => {
       db.all(
-        `SELECT t.*, u.id as creatorId, u.username as creatorName, COUNT(m.id) as message_count
+        `SELECT 
+           t.*, 
+           u.id as "creatorId", 
+           u.username as "creatorName", 
+           u.avatar_url as "creatorAvatar", 
+           COUNT(DISTINCT msg_count.id) as message_count,
+           m.id as msg_id,
+           m.content as msg_content,
+           m.created_at as msg_created_at,
+           mu.username as msg_senderName,
+           mu.avatar_url as msg_senderAvatar
          FROM topics t
          LEFT JOIN users u ON t.created_by = u.id
-         LEFT JOIN messages m ON t.id = m.topic_id
-         WHERE t.is_active = 1
-         GROUP BY t.id
-         ORDER BY message_count DESC, t.last_activity DESC
+         LEFT JOIN messages msg_count ON t.id = msg_count.topic_id AND msg_count.is_deleted = false
+         LEFT JOIN (
+           SELECT topic_id, MAX(id) as max_id
+           FROM messages
+           WHERE is_deleted = false
+           GROUP BY topic_id
+         ) latest ON latest.topic_id = t.id
+         LEFT JOIN messages m ON m.id = latest.max_id
+         LEFT JOIN users mu ON m.user_id = mu.id
+         WHERE t.is_active = true
+         GROUP BY t.id, u.id, u.username, u.avatar_url, m.id, m.content, m.created_at, mu.username, mu.avatar_url
+         ORDER BY COUNT(DISTINCT msg_count.id) DESC, t.last_activity DESC
          LIMIT ?`,
         [limit],
-        async (err, rows) => {
+        (err, rows) => {
           if (err) return reject(err);
-          
-          // 为每个话题获取最新消息
-          const topicsWithLatestMessage = await Promise.all(rows.map(async (topic) => {
-            const latestMessage = await require('./Message').getLatestMessageByTopic(topic.id);
-            return {
-              ...topic,
-              latestMessage: latestMessage ? {
-                content: `${latestMessage.senderName}：${latestMessage.content}`,
-                createdAt: latestMessage.created_at
-              } : null
-            };
-          }));
-          
+
+          const topicsWithLatestMessage = rows.map((row) => formatTopicRow(row, row));
+
           resolve(topicsWithLatestMessage);
         }
       );
@@ -147,14 +195,14 @@ class Topic {
   static getRecentActiveTopics(limit = 10) {
     return new Promise((resolve, reject) => {
       db.all(
-        `SELECT t.*, u.id as creatorId, u.username as creatorName
+        `SELECT t.*, u.id as "creatorId", u.username as "creatorName", u.avatar_url as "creatorAvatar"
          FROM topics t
          LEFT JOIN users u ON t.created_by = u.id
-         WHERE t.is_active = 1 
-         AND t.last_activity >= datetime('now', '-7 days', 'localtime')
+         WHERE t.is_active = true 
+         AND t.last_activity >= ?
          ORDER BY t.last_activity DESC
          LIMIT ?`,
-        [limit],
+        [time.formatDatabaseTime(new Date(time.nowMs() - 7 * 24 * 3600 * 1000)), limit],
         (err, rows) => {
           if (err) return reject(err);
           resolve(rows);
@@ -167,29 +215,36 @@ class Topic {
   static getRecentActiveTopicsWithLatestMessage(limit = 10) {
     return new Promise((resolve, reject) => {
       db.all(
-        `SELECT t.*, u.id as creatorId, u.username as creatorName
+        `SELECT 
+           t.*, 
+           u.id as "creatorId", 
+           u.username as "creatorName", 
+           u.avatar_url as "creatorAvatar",
+           m.id as msg_id,
+           m.content as msg_content,
+           m.created_at as msg_created_at,
+           mu.username as msg_senderName,
+           mu.avatar_url as msg_senderAvatar
          FROM topics t
          LEFT JOIN users u ON t.created_by = u.id
-         WHERE t.is_active = 1 
-         AND t.last_activity >= datetime('now', '-7 days', 'localtime')
+         LEFT JOIN (
+           SELECT topic_id, MAX(id) as max_id
+           FROM messages
+           WHERE is_deleted = false
+           GROUP BY topic_id
+         ) latest ON latest.topic_id = t.id
+         LEFT JOIN messages m ON m.id = latest.max_id
+         LEFT JOIN users mu ON m.user_id = mu.id
+         WHERE t.is_active = true 
+         AND t.last_activity >= ?
          ORDER BY t.last_activity DESC
          LIMIT ?`,
-        [limit],
-        async (err, rows) => {
+        [time.formatDatabaseTime(new Date(time.nowMs() - 7 * 24 * 3600 * 1000)), limit],
+        (err, rows) => {
           if (err) return reject(err);
-          
-          // 为每个话题获取最新消息
-          const topicsWithLatestMessage = await Promise.all(rows.map(async (topic) => {
-            const latestMessage = await require('./Message').getLatestMessageByTopic(topic.id);
-            return {
-              ...topic,
-              latestMessage: latestMessage ? {
-                content: `${latestMessage.senderName}：${latestMessage.content}`,
-                createdAt: latestMessage.created_at
-              } : null
-            };
-          }));
-          
+
+          const topicsWithLatestMessage = rows.map((row) => formatTopicRow(row, row));
+
           resolve(topicsWithLatestMessage);
         }
       );
@@ -200,11 +255,11 @@ class Topic {
   static getNewTopics(limit = 10) {
     return new Promise((resolve, reject) => {
       db.all(
-        `SELECT t.*, u.id as creatorId, u.username as creatorName
+        `SELECT t.*, u.id as "creatorId", u.username as "creatorName", u.avatar_url as "creatorAvatar"
          FROM topics t
          LEFT JOIN users u ON t.created_by = u.id
-         WHERE t.is_active = 1
-         ORDER BY t.created_at DESC
+         WHERE t.is_active = true
+         ORDER BY t.id DESC
          LIMIT ?`,
         [limit],
         (err, rows) => {
@@ -219,28 +274,35 @@ class Topic {
   static getNewTopicsWithLatestMessage(limit = 10) {
     return new Promise((resolve, reject) => {
       db.all(
-        `SELECT t.*, u.id as creatorId, u.username as creatorName
+        `SELECT 
+           t.*, 
+           u.id as "creatorId", 
+           u.username as "creatorName", 
+           u.avatar_url as "creatorAvatar",
+           m.id as msg_id,
+           m.content as msg_content,
+           m.created_at as msg_created_at,
+           mu.username as msg_senderName,
+           mu.avatar_url as msg_senderAvatar
          FROM topics t
          LEFT JOIN users u ON t.created_by = u.id
-         WHERE t.is_active = 1
-         ORDER BY t.created_at DESC
+         LEFT JOIN (
+           SELECT topic_id, MAX(id) as max_id
+           FROM messages
+           WHERE is_deleted = false
+           GROUP BY topic_id
+         ) latest ON latest.topic_id = t.id
+         LEFT JOIN messages m ON m.id = latest.max_id
+         LEFT JOIN users mu ON m.user_id = mu.id
+         WHERE t.is_active = true
+         ORDER BY t.id DESC
          LIMIT ?`,
         [limit],
-        async (err, rows) => {
+        (err, rows) => {
           if (err) return reject(err);
-          
-          // 为每个话题获取最新消息
-          const topicsWithLatestMessage = await Promise.all(rows.map(async (topic) => {
-            const latestMessage = await require('./Message').getLatestMessageByTopic(topic.id);
-            return {
-              ...topic,
-              latestMessage: latestMessage ? {
-                content: `${latestMessage.senderName}：${latestMessage.content}`,
-                createdAt: latestMessage.created_at
-              } : null
-            };
-          }));
-          
+
+          const topicsWithLatestMessage = rows.map((row) => formatTopicRow(row, row));
+
           resolve(topicsWithLatestMessage);
         }
       );
@@ -251,11 +313,11 @@ class Topic {
   static findAll(userId, limit = 50) {
     return new Promise((resolve, reject) => {
       db.all(
-        `SELECT t.*, u.id as creatorId, u.username as creatorName
+        `SELECT t.*, u.id as "creatorId", u.username as "creatorName", u.avatar_url as "creatorAvatar"
          FROM topics t
          LEFT JOIN users u ON t.created_by = u.id
          INNER JOIN topic_members tm ON t.id = tm.topic_id
-         WHERE tm.user_id = ? AND t.is_active = 1
+         WHERE tm.user_id = ? AND t.is_active = true
          ORDER BY t.last_activity DESC, t.created_at DESC
          LIMIT ?`,
         [userId, limit],
@@ -271,29 +333,36 @@ class Topic {
   static findAllWithLatestMessage(userId, limit = 50) {
     return new Promise((resolve, reject) => {
       db.all(
-        `SELECT t.*, u.id as creatorId, u.username as creatorName
+        `SELECT 
+           t.*, 
+           u.id as "creatorId", 
+           u.username as "creatorName", 
+           u.avatar_url as "creatorAvatar",
+           m.id as msg_id,
+           m.content as msg_content,
+           m.created_at as msg_created_at,
+           mu.username as msg_senderName,
+           mu.avatar_url as msg_senderAvatar
          FROM topics t
          LEFT JOIN users u ON t.created_by = u.id
          INNER JOIN topic_members tm ON t.id = tm.topic_id
-         WHERE tm.user_id = ? AND t.is_active = 1
+         LEFT JOIN (
+           SELECT topic_id, MAX(id) as max_id
+           FROM messages
+           WHERE is_deleted = false
+           GROUP BY topic_id
+         ) latest ON latest.topic_id = t.id
+         LEFT JOIN messages m ON m.id = latest.max_id
+         LEFT JOIN users mu ON m.user_id = mu.id
+         WHERE tm.user_id = ? AND t.is_active = true
          ORDER BY t.last_activity DESC, t.created_at DESC
          LIMIT ?`,
         [userId, limit],
-        async (err, rows) => {
+        (err, rows) => {
           if (err) return reject(err);
-          
-          // 为每个话题获取最新消息
-          const topicsWithLatestMessage = await Promise.all(rows.map(async (topic) => {
-            const latestMessage = await require('./Message').getLatestMessageByTopic(topic.id);
-            return {
-              ...topic,
-              latestMessage: latestMessage ? {
-                content: `${latestMessage.senderName}：${latestMessage.content}`,
-                createdAt: latestMessage.created_at
-              } : null
-            };
-          }));
-          
+
+          const topicsWithLatestMessage = rows.map((row) => formatTopicRow(row, row));
+
           resolve(topicsWithLatestMessage);
         }
       );
@@ -307,38 +376,39 @@ class Topic {
       let sql, params;
       if (!isNaN(query)) {
         // 按ID搜索（仅非私有话题或用户已加入的私有话题）
-        sql = `SELECT t.*, u.id as creatorId, u.username as creatorName
+        sql = `SELECT t.*, u.id as "creatorId", u.username as "creatorName", u.avatar_url as "creatorAvatar"
                FROM topics t
                LEFT JOIN users u ON t.created_by = u.id
                LEFT JOIN topic_members tm ON t.id = tm.topic_id AND tm.user_id = ?
-               WHERE t.id = ? AND t.is_active = 1 AND (t.is_private = 0 OR tm.user_id IS NOT NULL)
+               WHERE t.id = ? AND t.is_active = true AND (t.is_private = false OR tm.user_id IS NOT NULL)
                LIMIT ?`;
         params = [userId, parseInt(query), limit];
       } else {
         // 按名称搜索（仅非私有话题或用户已加入的私有话题）
-        sql = `SELECT t.*, u.id as creatorId, u.username as creatorName
+        sql = `SELECT t.*, u.id as "creatorId", u.username as "creatorName", u.avatar_url as "creatorAvatar", tm.user_id as is_member_flag
                FROM topics t
                LEFT JOIN users u ON t.created_by = u.id
                LEFT JOIN topic_members tm ON t.id = tm.topic_id AND tm.user_id = ?
-               WHERE t.name LIKE ? AND t.is_active = 1 AND (t.is_private = 0 OR tm.user_id IS NOT NULL)
+               WHERE t.name LIKE ? AND t.is_active = true AND (t.is_private = false OR tm.user_id IS NOT NULL)
                ORDER BY t.last_activity DESC, t.created_at DESC
                LIMIT ?`;
         params = [userId, `%${query}%`, limit];
       }
-      
+
       db.all(sql, params, (err, rows) => {
         if (err) return reject(err);
-        
-        // 为每个话题添加用户是否已加入的信息
-        const topicPromises = rows.map(async (topic) => {
-          const isMember = await Topic.isMember(topic.id, userId);
+
+        // 通过 SQL left join 的 is_member_flag 判断
+        const processedTopics = rows.map((topic) => {
+          const isMember = !!topic.is_member_flag;
+          delete topic.is_member_flag;
           return {
             ...topic,
             is_member: isMember
           };
         });
-        
-        Promise.all(topicPromises).then(resolve).catch(reject);
+
+        resolve(processedTopics);
       });
     });
   }
@@ -348,42 +418,54 @@ class Topic {
     return new Promise((resolve, reject) => {
       // 如果查询是数字，按ID搜索；否则按名称搜索
       let sql, params;
+      const baseSelect = `
+        SELECT 
+          t.*, 
+          u.id as "creatorId", 
+          u.username as "creatorName", 
+          u.avatar_url as "creatorAvatar",
+          m.id as msg_id,
+          m.content as msg_content,
+          m.created_at as msg_created_at,
+          mu.username as msg_senderName,
+          mu.avatar_url as msg_senderAvatar
+        FROM topics t
+        LEFT JOIN users u ON t.created_by = u.id
+        LEFT JOIN topic_members tm ON t.id = tm.topic_id AND tm.user_id = ?
+        LEFT JOIN (
+           SELECT topic_id, MAX(id) as max_id
+           FROM messages
+           WHERE is_deleted = false
+           GROUP BY topic_id
+        ) latest ON latest.topic_id = t.id
+        LEFT JOIN messages m ON m.id = latest.max_id
+        LEFT JOIN users mu ON m.user_id = mu.id
+      `;
       if (!isNaN(query)) {
         // 按ID搜索（仅非私有话题或用户已加入的私有话题）
-        sql = `SELECT t.*, u.id as creatorId, u.username as creatorName
-               FROM topics t
-               LEFT JOIN users u ON t.created_by = u.id
-               LEFT JOIN topic_members tm ON t.id = tm.topic_id AND tm.user_id = ?
-               WHERE t.id = ? AND t.is_active = 1 AND (t.is_private = 0 OR tm.user_id IS NOT NULL)
+        sql = baseSelect + `
+               WHERE t.id = ? AND t.is_active = true AND (t.is_private = false OR tm.user_id IS NOT NULL)
                LIMIT ?`;
         params = [userId, parseInt(query), limit];
       } else {
         // 按名称搜索（仅非私有话题或用户已加入的私有话题）
-        sql = `SELECT t.*, u.id as creatorId, u.username as creatorName
-               FROM topics t
-               LEFT JOIN users u ON t.created_by = u.id
-               LEFT JOIN topic_members tm ON t.id = tm.topic_id AND tm.user_id = ?
-               WHERE t.name LIKE ? AND t.is_active = 1 AND (t.is_private = 0 OR tm.user_id IS NOT NULL)
+        sql = baseSelect + `
+               WHERE t.name LIKE ? AND t.is_active = true AND (t.is_private = false OR tm.user_id IS NOT NULL)
                ORDER BY t.last_activity DESC, t.created_at DESC
                LIMIT ?`;
         params = [userId, `%${query}%`, limit];
       }
-      
-      db.all(sql, params, async (err, rows) => {
+
+      db.all(sql, params, (err, rows) => {
         if (err) return reject(err);
-        
-        // 为每个话题获取最新消息
-        const topicsWithLatestMessage = await Promise.all(rows.map(async (topic) => {
-          const latestMessage = await require('./Message').getLatestMessageByTopic(topic.id);
-          return {
-            ...topic,
-            latestMessage: latestMessage ? {
-              content: `${latestMessage.senderName}：${latestMessage.content}`,
-              createdAt: latestMessage.created_at
-            } : null
-          };
-        }));
-        
+
+        const topicsWithLatestMessage = rows.map((row) => {
+          const isMember = (row.is_member_flag !== undefined && row.is_member_flag !== null);
+          const formatted = formatTopicRow(row, row);
+          formatted.is_member = isMember;
+          return formatted;
+        });
+
         resolve(topicsWithLatestMessage);
       });
     });
@@ -392,7 +474,7 @@ class Topic {
   static findByName(name) {
     return new Promise((resolve, reject) => {
       db.get(
-        "SELECT id FROM topics WHERE name = ? AND is_active = 1",
+        "SELECT id FROM topics WHERE name = ? AND is_active = true",
         [name],
         (err, row) => {
           if (err) return reject(err);
@@ -405,10 +487,10 @@ class Topic {
   static findById(id) {
     return new Promise((resolve, reject) => {
       db.get(
-        `SELECT t.*, u.id as creatorId, u.username as creatorName
+        `SELECT t.*, u.id as "creatorId", u.username as "creatorName", u.avatar_url as "creatorAvatar"
          FROM topics t
          LEFT JOIN users u ON t.created_by = u.id
-         WHERE t.id = ? AND t.is_active = 1`,
+         WHERE t.id = ? AND t.is_active = true`,
         [id],
         (err, row) => {
           if (err) return reject(err);
@@ -422,7 +504,7 @@ class Topic {
   static getAnnouncement(topicId) {
     return new Promise((resolve, reject) => {
       db.get(
-        `SELECT announcement FROM topics WHERE id = ? AND is_active = 1`,
+        `SELECT announcement FROM topics WHERE id = ? AND is_active = true`,
         [topicId],
         (err, row) => {
           if (err) return reject(err);
@@ -506,7 +588,7 @@ class Topic {
   static getMembers(topicId, limit = 50) {
     return new Promise((resolve, reject) => {
       db.all(
-        `SELECT u.id, u.username, u.registration_order, tm.joined_at, tm.role, 
+        `SELECT u.id, u.username, u.avatar_url, u.registration_order, tm.joined_at, tm.role, 
                CASE WHEN tmu.user_id IS NOT NULL THEN 1 ELSE 0 END AS is_muted
          FROM topic_members tm
          JOIN users u ON tm.user_id = u.id
@@ -526,7 +608,8 @@ class Topic {
           // 格式化时间
           const formattedRows = rows.map(row => ({
             ...row,
-            joined_at: formatLocalTime(row.joined_at),
+            avatarUrl: row.avatar_url,
+            joined_at: time.formatLocalTime(row.joined_at),
             isMuted: !!row.is_muted
           }));
           resolve(formattedRows);
@@ -553,13 +636,14 @@ class Topic {
   static joinTopic(topicId, userId) {
     return new Promise((resolve, reject) => {
       // 使用本地时间
-      const currentTime = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false });
-      
+      const currentTime = time.formatDatabaseTime();
+
       db.run(
-        "INSERT OR IGNORE INTO topic_members (topic_id, user_id, role, joined_at) VALUES (?, ?, 'member', ?)",
+        "INSERT INTO topic_members (topic_id, user_id, role, joined_at) VALUES (?, ?, 'member', ?) ON CONFLICT DO NOTHING",
         [topicId, userId, currentTime],
-        function(err) {
+        function (err) {
           if (err) return reject(err);
+          invalidateTopicCache(topicId); // 清除缓存
           resolve({ changes: this.changes });
         }
       );
@@ -575,16 +659,17 @@ class Topic {
         [topicId, userId],
         (err, row) => {
           if (err) return reject(err);
-          
+
           if (row) {
             return reject(new Error('话题创建者不能退出自己创建的话题'));
           }
-          
+
           db.run(
             "DELETE FROM topic_members WHERE topic_id = ? AND user_id = ?",
             [topicId, userId],
-            function(err) {
+            function (err) {
               if (err) return reject(err);
+              invalidateTopicCache(topicId); // 清除缓存
               resolve({ changes: this.changes });
             }
           );
@@ -602,26 +687,26 @@ class Topic {
         [topicId, userId],
         (err, row) => {
           if (err) return reject(err);
-          
+
           if (!row) {
             return reject(new Error('只有话题创建者可以设置管理员'));
           }
-          
+
           // 不能将创建者设为管理员（创建者始终是创建者）
           db.get(
             "SELECT 1 FROM topic_members WHERE topic_id = ? AND user_id = ? AND role = 'creator'",
             [topicId, adminId],
             (err, row) => {
               if (err) return reject(err);
-              
+
               if (row) {
                 return reject(new Error('不能修改创建者的角色'));
               }
-              
+
               db.run(
                 "UPDATE topic_members SET role = 'admin' WHERE topic_id = ? AND user_id = ?",
                 [topicId, adminId],
-                function(err) {
+                function (err) {
                   if (err) return reject(err);
                   resolve({ changes: this.changes });
                 }
@@ -642,26 +727,26 @@ class Topic {
         [topicId, userId],
         (err, row) => {
           if (err) return reject(err);
-          
+
           if (!row) {
             return reject(new Error('只有话题创建者可以取消管理员'));
           }
-          
+
           // 不能修改创建者的角色
           db.get(
             "SELECT 1 FROM topic_members WHERE topic_id = ? AND user_id = ? AND role = 'creator'",
             [topicId, adminId],
             (err, row) => {
               if (err) return reject(err);
-              
+
               if (row) {
                 return reject(new Error('不能修改创建者的角色'));
               }
-              
+
               db.run(
                 "UPDATE topic_members SET role = 'member' WHERE topic_id = ? AND user_id = ?",
                 [topicId, adminId],
-                function(err) {
+                function (err) {
                   if (err) return reject(err);
                   resolve({ changes: this.changes });
                 }
@@ -676,47 +761,52 @@ class Topic {
   // 修改话题信息
   static updateTopic(topicId, userId, updates) {
     return new Promise((resolve, reject) => {
-      const { name, description, announcement } = updates;
-      
+      const { name, description, announcement, avatar_url } = updates;
+
       // 只有创建者和管理员可以修改话题信息
       db.get(
         "SELECT 1 FROM topic_members WHERE topic_id = ? AND user_id = ? AND (role = 'creator' OR role = 'admin')",
         [topicId, userId],
         (err, row) => {
           if (err) return reject(err);
-          
+
           if (!row) {
             return reject(new Error('只有话题创建者和管理员可以修改话题信息'));
           }
-          
+
           let sql = "UPDATE topics SET ";
           let params = [];
           let updatesArr = [];
-          
+
           if (name !== undefined) {
             updatesArr.push("name = ?");
             params.push(name);
           }
-          
+
           if (description !== undefined) {
             updatesArr.push("description = ?");
             params.push(description);
           }
-          
+
           if (announcement !== undefined) {
             updatesArr.push("announcement = ?");
             params.push(announcement);
           }
-          
+
+          if (avatar_url !== undefined) {
+            updatesArr.push("avatar_url = ?");
+            params.push(avatar_url);
+          }
+
           if (updatesArr.length === 0) {
             return resolve({ changes: 0 });
           }
-          
+
           sql += updatesArr.join(", ");
           sql += " WHERE id = ?";
           params.push(topicId);
-          
-          db.run(sql, params, function(err) {
+
+          db.run(sql, params, function (err) {
             if (err) return reject(err);
             resolve({ changes: this.changes });
           });
@@ -734,15 +824,15 @@ class Topic {
         [topicId, userId],
         (err, row) => {
           if (err) return reject(err);
-          
+
           if (!row) {
             return reject(new Error('只有话题创建者可以修改话题的私有状态'));
           }
-          
+
           db.run(
             "UPDATE topics SET is_private = ? WHERE id = ?",
-            [isPrivate ? 1 : 0, topicId],
-            function(err) {
+            [isPrivate ? true : false, topicId],
+            function (err) {
               if (err) return reject(err);
               resolve({ changes: this.changes });
             }
@@ -761,15 +851,15 @@ class Topic {
         [topicId, userId],
         (err, row) => {
           if (err) return reject(err);
-          
+
           if (!row) {
             return reject(new Error('只有话题创建者和管理员可以设置公告'));
           }
-          
+
           db.run(
             "UPDATE topics SET announcement = ? WHERE id = ?",
             [announcement, topicId],
-            function(err) {
+            function (err) {
               if (err) return reject(err);
               resolve({ changes: this.changes });
             }
@@ -783,9 +873,9 @@ class Topic {
   static archive(id) {
     return new Promise((resolve, reject) => {
       db.run(
-        "UPDATE topics SET is_active = 0 WHERE id = ?",
+        "UPDATE topics SET is_active = false WHERE id = ?",
         [id],
-        function(err) {
+        function (err) {
           if (err) return reject(err);
           resolve({ changes: this.changes });
         }
@@ -802,43 +892,44 @@ class Topic {
         [topicId, removerId],
         (err, removerRow) => {
           if (err) return reject(err);
-          
+
           if (!removerRow) {
             return reject(new Error('您不是该话题的成员'));
           }
-          
+
           // 只有创建者和管理员可以移除成员
           if (removerRow.role !== 'creator' && removerRow.role !== 'admin') {
             return reject(new Error('只有话题创建者和管理员可以移除成员'));
           }
-          
+
           // 检查被移除者的信息
           db.get(
             "SELECT role FROM topic_members WHERE topic_id = ? AND user_id = ?",
             [topicId, memberId],
             (err, memberRow) => {
               if (err) return reject(err);
-              
+
               if (!memberRow) {
                 return reject(new Error('该用户不是话题成员'));
               }
-              
+
               // 管理员不能移除创建者或其它管理员
               if (removerRow.role === 'admin' && (memberRow.role === 'creator' || memberRow.role === 'admin')) {
                 return reject(new Error('管理员不能移除创建者或其他管理员'));
               }
-              
+
               // 不能移除自己
               if (removerId === memberId) {
                 return reject(new Error('不能移除自己'));
               }
-              
+
               // 执行移除操作
               db.run(
                 "DELETE FROM topic_members WHERE topic_id = ? AND user_id = ?",
                 [topicId, memberId],
-                function(err) {
+                function (err) {
                   if (err) return reject(err);
+                  invalidateTopicCache(topicId); // 清除缓存
                   resolve({ changes: this.changes });
                 }
               );
@@ -858,43 +949,43 @@ class Topic {
         [topicId, muterId],
         (err, muterRow) => {
           if (err) return reject(err);
-          
+
           if (!muterRow) {
             return reject(new Error('您不是该话题的成员'));
           }
-          
+
           // 只有创建者和管理员可以禁言用户
           if (muterRow.role !== 'creator' && muterRow.role !== 'admin') {
             return reject(new Error('只有话题创建者和管理员可以禁言用户'));
           }
-          
+
           // 检查被禁言者的信息
           db.get(
             "SELECT role FROM topic_members WHERE topic_id = ? AND user_id = ?",
             [topicId, userId],
             (err, userRow) => {
               if (err) return reject(err);
-              
+
               if (!userRow) {
                 return reject(new Error('该用户不是话题成员'));
               }
-              
+
               // 管理员不能禁言创建者或其它管理员
               if (muterRow.role === 'admin' && (userRow.role === 'creator' || userRow.role === 'admin')) {
                 return reject(new Error('管理员不能禁言创建者或其他管理员'));
               }
-              
+
               // 不能禁言自己
               if (muterId === userId) {
                 return reject(new Error('不能禁言自己'));
               }
-              
+
               // 执行禁言操作
-              const currentTime = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false });
+              const currentTime = time.formatDatabaseTime();
               db.run(
-                "INSERT OR REPLACE INTO topic_muted_users (topic_id, user_id, muted_by, reason, created_at) VALUES (?, ?, ?, ?, ?)",
+                "INSERT INTO topic_muted_users (topic_id, user_id, muted_by, reason, created_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT (topic_id, user_id) DO UPDATE SET muted_by = EXCLUDED.muted_by, reason = EXCLUDED.reason, created_at = EXCLUDED.created_at",
                 [topicId, userId, muterId, reason, currentTime],
-                function(err) {
+                function (err) {
                   if (err) return reject(err);
                   resolve({ changes: this.changes });
                 }
@@ -915,16 +1006,16 @@ class Topic {
         [topicId, unmuterId],
         (err, unmuterRow) => {
           if (err) return reject(err);
-          
+
           if (!unmuterRow) {
             return reject(new Error('您不是该话题的成员'));
           }
-          
+
           // 只有创建者和管理员可以解除禁言
           if (unmuterRow.role !== 'creator' && unmuterRow.role !== 'admin') {
             return reject(new Error('只有话题创建者和管理员可以解除禁言'));
           }
-          
+
           // 管理员只能解除普通成员的禁言，不能解除创建者或其它管理员的禁言
           if (unmuterRow.role === 'admin') {
             db.get(
@@ -932,20 +1023,20 @@ class Topic {
               [topicId, userId],
               (err, userRow) => {
                 if (err) return reject(err);
-                
+
                 if (!userRow) {
                   return reject(new Error('该用户不是话题成员'));
                 }
-                
+
                 if (userRow.role === 'creator' || userRow.role === 'admin') {
                   return reject(new Error('管理员只能解除普通成员的禁言'));
                 }
-                
+
                 // 执行解除禁言操作
                 db.run(
                   "DELETE FROM topic_muted_users WHERE topic_id = ? AND user_id = ?",
                   [topicId, userId],
-                  function(err) {
+                  function (err) {
                     if (err) return reject(err);
                     resolve({ changes: this.changes });
                   }
@@ -957,7 +1048,7 @@ class Topic {
             db.run(
               "DELETE FROM topic_muted_users WHERE topic_id = ? AND user_id = ?",
               [topicId, userId],
-              function(err) {
+              function (err) {
                 if (err) return reject(err);
                 resolve({ changes: this.changes });
               }
@@ -986,7 +1077,7 @@ class Topic {
   static getUserMuteInfo(topicId, userId) {
     return new Promise((resolve, reject) => {
       db.get(
-        `SELECT tm.*, u.username as mutedByUsername
+        `SELECT tm.*, u.username as "mutedByUsername"
          FROM topic_muted_users tm
          JOIN users u ON tm.muted_by = u.id
          WHERE tm.topic_id = ? AND tm.user_id = ?`,
@@ -994,7 +1085,7 @@ class Topic {
         (err, row) => {
           if (err) return reject(err);
           if (row) {
-            row.created_at = formatLocalTime(row.created_at);
+            row.created_at = time.formatLocalTime(row.created_at);
           }
           resolve(row);
         }

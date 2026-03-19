@@ -17,7 +17,7 @@ const storage = multer.diskStorage({
   },
   filename: function (req, file, cb) {
     // 生成临时文件名
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    const uniqueSuffix = time.nowMs() + '-' + Math.round(Math.random() * 1E9);
     const ext = path.extname(file.originalname);
     cb(null, 'temp-' + uniqueSuffix + ext);
   }
@@ -29,7 +29,7 @@ const fileFilter = (req, file, cb) => {
   const allowedMimes = [
     // 图片
     'image/jpeg',
-    'image/jpg', 
+    'image/jpg',
     'image/png',
     'image/gif',
     'image/webp',
@@ -72,7 +72,7 @@ const fileFilter = (req, file, cb) => {
 };
 
 // 创建multer中间件
-const upload = multer({ 
+const upload = multer({
   storage: storage,
   fileFilter: fileFilter,
   limits: {
@@ -82,26 +82,34 @@ const upload = multer({
 
 // 导出一个函数，该函数在上传完成后处理MD5重命名
 const processFileWithMd5 = (req, res, next) => {
-  upload.single('file')(req, res, async (err) => {
+  upload.any()(req, res, async (err) => {
     if (err) {
+      if (err instanceof multer.MulterError) {
+        return res.status(400).json({ success: false, message: '文件上传错误: ' + err.message });
+      }
       return next(err);
     }
-    
+
+    // 处理多字段或不同字段名上传，将第一个文件赋给 req.file
+    if (req.files && req.files.length > 0 && !req.file) {
+      req.file = req.files[0];
+    }
+
     if (req.file) {
       try {
         // 读取临时文件内容并计算MD5
         const fileBuffer = fs.readFileSync(req.file.path);
         const fileMd5 = md5(fileBuffer);
-        
+
         // 获取原始文件扩展名
         const ext = path.extname(req.file.originalname);
-        
+
         // 构建新的文件路径
         const newPath = path.join(uploadDir, fileMd5);
-        
+
         // 重命名文件为MD5值（无扩展名）
         fs.renameSync(req.file.path, newPath);
-        
+
         // 更新req.file信息
         req.file.filename = fileMd5;
         req.file.path = newPath;
@@ -111,7 +119,7 @@ const processFileWithMd5 = (req, res, next) => {
         return next(error);
       }
     }
-    
+
     next();
   });
 };

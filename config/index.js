@@ -10,9 +10,16 @@ if (!fs.existsSync(dbDir)) {
 
 module.exports = {
   port: process.env.PORT || 3009,
-  jwtSecret: process.env.JWT_SECRET || 'XXX',
+  jwtSecret: process.env.JWT_SECRET || 'XxX',
+  timezoneOffset: process.env.TIMEZONE_OFFSET || 8, // UTC 偏移量，默认为 +8
   database: {
-    path: './data/chat.db'
+    type: 'postgres',
+    host: '192.168.124.9',
+    port: 5432,
+    database: 'fmcofe',
+    user: 'xxx',
+    password: 'xxx',
+    max: 20
   },
   mqtt: {
     broker: process.env.MQTT_BROKER || 'wss://api-cofe.allons-y.uk:3009',

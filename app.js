@@ -9,6 +9,12 @@ const { initializeDatabase } = require('./initialization/database');
 // 移除对不存在的 initializeDefaultData 的引用
 const config = require('./config');
 const { initInternalMQTT } = require('./services/mqtt');
+const { initializeOIDCClient } = require('./utils/oidcClient');
+const oidcSyncService = require('./services/oidcSync');
+const time = require('./utils/time');
+
+// 设置全局时区为 Asia/Shanghai
+time.setProcessTimezone();
 
 const app = express();
 const PORT = config.port;
@@ -26,15 +32,15 @@ app.use('/static/uploads', express.static(path.join(__dirname, 'uploads')));
 app.use('/uploads', (req, res, next) => {
   const filePath = req.path;
   const uploadsDir = path.join(__dirname, 'uploads');
-  
+
   // 提取文件名和扩展名
   const ext = path.extname(filePath);
   const fileNameWithoutExt = path.basename(filePath, ext);
-  
+
   // 检查是否有扩展名，如果有，检查对应的无扩展名文件是否存在
   if (ext) {
     const md5FilePath = path.join(uploadsDir, fileNameWithoutExt);
-    
+
     fs.access(md5FilePath, fs.constants.F_OK, (err) => {
       if (err) {
         // 文件不存在，继续下一个中间件
@@ -72,10 +78,10 @@ app.use('/uploads', (req, res, next) => {
           '.ppt': 'application/vnd.ms-powerpoint',
           '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
         };
-        
+
         const contentType = mimeTypes[ext.toLowerCase()] || 'application/octet-stream';
         res.setHeader('Content-Type', contentType);
-        
+
         // 发送文件
         res.sendFile(md5FilePath);
       }
@@ -92,7 +98,7 @@ app.use('/api', routes);
 // 重置密码页面
 app.get('/reset-password', (req, res) => {
   const token = req.query.token;
-  
+
   // 简单的HTML表单页面
   const html = `
   <!DOCTYPE html>
@@ -192,7 +198,7 @@ app.get('/reset-password', (req, res) => {
   </body>
   </html>
   `;
-  
+
   res.send(html);
 });
 
@@ -203,10 +209,29 @@ async function startServer() {
     // 初始化数据库
     await initializeDatabase();
     console.log('✅ 数据库初始化完成');
-    
+
+    // OIDC客户端初始化
+    console.log('初始化OIDC客户端...');
+    try {
+      await initializeOIDCClient();
+      console.log('✅ OIDC客户端初始化完成');
+    } catch (error) {
+      console.error('❌ OIDC客户端初始化失败:', error);
+      // 不抛出错误，因为这不应该阻止服务器启动
+    }
+
+    console.log('启动OIDC用户信息同步服务...');
+    try {
+      oidcSyncService.startSyncService();
+      console.log('✅ OIDC用户信息同步服务启动完成');
+    } catch (error) {
+      console.error('❌ OIDC用户信息同步服务启动失败:', error);
+      // 不抛出错误，因为这不应该阻止服务器启动
+    }
+
     console.log('准备启动服务器...');
     let server;
-    
+
     // 检查是否启用SSL
     if (config.ssl.enabled) {
       console.log('🔒 SSL已启用');
@@ -218,18 +243,18 @@ async function startServer() {
         if (!fs.existsSync(config.ssl.certPath)) {
           throw new Error(`SSL证书文件不存在: ${config.ssl.certPath}`);
         }
-        
+
         // 读取SSL证书
         const sslOptions = {
           key: fs.readFileSync(config.ssl.keyPath),
           cert: fs.readFileSync(config.ssl.certPath)
         };
-        
+
         // 如果有CA证书，也读取它
         if (config.ssl.caPath && fs.existsSync(config.ssl.caPath)) {
           sslOptions.ca = fs.readFileSync(config.ssl.caPath);
         }
-        
+
         // 创建HTTPS服务器
         server = https.createServer(sslOptions, app);
         console.log('✅ SSL证书加载成功');
@@ -242,14 +267,14 @@ async function startServer() {
       // 创建HTTP服务器
       server = app.listen(0); // 先创建一个临时服务器
     }
-    
+
     // 启动服务器
     server.listen(PORT, () => {
       const protocol = config.ssl.enabled ? 'https' : 'http';
       console.log(`🚀 服务器运行在 ${protocol}://localhost:${PORT}`);
       console.log(`📡 MQTT代理: ${config.mqtt.broker}`);
     });
-    
+
     // 初始化内部MQTT WebSocket服务器
     try {
       await initInternalMQTT(server);
@@ -257,12 +282,12 @@ async function startServer() {
     } catch (error) {
       console.error('MQTT WebSocket服务器初始化失败:', error);
     }
-    
+
     // 监听服务器启动错误
     server.on('error', (error) => {
       console.error('服务器启动错误:', error);
     });
-    
+
     // 设置定时任务，每小时清理一次过期的密码重置令牌
     const User = require('./models/User');
     setInterval(async () => {
@@ -272,29 +297,31 @@ async function startServer() {
         console.error('清理过期密码重置令牌时出错:', error);
       }
     }, 60 * 60 * 1000); // 每小时执行一次
-    
+
     // 优雅关闭
     process.on('SIGINT', () => {
-      console.log('\\n正在关闭服务器...');
+      console.log('\n正在关闭服务器...');
       server.close(() => {
         console.log('服务器已关闭');
+        // 停止同步服务（OIDC功能已禁用）
+        oidcSyncService.stopSyncService();
         process.exit(0);
       });
     });
-    
+
     // 添加未捕获异常处理
     process.on('uncaughtException', (error) => {
       console.error('未捕获的异常:', error);
       console.error('堆栈跟踪:', error.stack);
       process.exit(1);
     });
-    
+
     process.on('unhandledRejection', (reason, promise) => {
       console.error('未处理的Promise拒绝:', reason);
       console.error('拒绝的Promise:', promise);
       process.exit(1);
     });
-    
+
   } catch (error) {
     console.error('启动服务器时出错:', error);
     console.error('错误堆栈:', error.stack);
