@@ -130,6 +130,9 @@ dist
 .yarn/install-state.gz
 .pnp.*
 
+# bun
+bun.lock
+
 # 聊天室数据文件
 .env*
 data/
